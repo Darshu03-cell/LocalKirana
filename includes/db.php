@@ -39,6 +39,9 @@ function db_init(PDO $pdo): void {
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, category TEXT, price INTEGER, stock INTEGER,
     image TEXT, vendor TEXT, rating REAL, unit TEXT
   )");
+  $pdo->exec("CREATE TABLE IF NOT EXISTS product_catalog (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, category TEXT, image TEXT, unit TEXT
+  )");
   $pdo->exec("CREATE TABLE IF NOT EXISTS orders (
     id TEXT PRIMARY KEY, customerId INTEGER, customerName TEXT, customerEmail TEXT, vendor TEXT, vendorId INTEGER,
     items INTEGER, total INTEGER, status TEXT, date TEXT, paymentMethod TEXT, paymentStatus TEXT, deliveryAddress TEXT

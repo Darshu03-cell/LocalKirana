@@ -29,7 +29,7 @@ $shownOrders  = $statusFilter === 'All' ? $vendorOrders : array_values(array_fil
 
 $editProduct = isset($_GET['edit']) ? find_by_id($vendorProducts, (int) $_GET['edit']) : null;
 $showForm    = isset($_GET['new']) || $editProduct;
-$catalogProducts = products();
+$catalogProducts = catalog_products();
 $formProduct = $editProduct ?: (isset($_GET['source']) ? find_by_id($catalogProducts, (int) $_GET['source']) : null);
 $CATS = category_names();
 

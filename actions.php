@@ -89,7 +89,7 @@ switch ($do) {
     $data = $_POST;
     $sourceId = (int) ($_POST['source_id'] ?? 0);
     if ($sourceId) {
-      $source = find_by_id(products(), $sourceId);
+      $source = find_by_id(catalog_products(), $sourceId);
       if ($source) {
         $data = array_merge([
           'name'     => $source['name'],

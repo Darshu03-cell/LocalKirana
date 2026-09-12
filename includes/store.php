@@ -32,6 +32,65 @@ function brand_tagline(): string {
 
 /* --------------------------------- getters --------------------------------- */
 function products(): array             { return db_all("SELECT * FROM products ORDER BY id"); }
+function catalog_products(): array {
+  $rows = db_all("SELECT * FROM product_catalog ORDER BY id");
+  if ($rows) return $rows;
+
+  $catalog = [
+    ['Potato', 'Vegetables', 'https://images.unsplash.com/photo-1518977676601-b53f82aba655?w=600', '1kg'],
+    ['Onion', 'Vegetables', 'https://images.unsplash.com/photo-1508747703725-719777637510?w=600', '1kg'],
+    ['Tomato', 'Vegetables', 'https://images.unsplash.com/photo-1546094096-0df4bcaaa337?w=600', '1kg'],
+    ['Beetroot', 'Vegetables', 'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=600', '1kg'],
+    ['Carrot', 'Vegetables', 'https://images.unsplash.com/photo-1445282768818-728615cc910a?w=600', '1kg'],
+    ['Spinach', 'Vegetables', 'https://images.unsplash.com/photo-1576045057995-568f588f82fb?w=600', '1 bunch'],
+    ['Cauliflower', 'Vegetables', 'https://images.unsplash.com/photo-1568584711075-3d021a7c3ca3?w=600', '1 piece'],
+    ['Cabbage', 'Vegetables', 'https://images.unsplash.com/photo-1594282486552-05b4d80fbb9f?w=600', '1 piece'],
+    ['Brinjal', 'Vegetables', 'https://images.unsplash.com/photo-1615484477778-ca3b77940c25?w=600', '1kg'],
+    ['Lady Finger', 'Vegetables', 'https://images.unsplash.com/photo-1425543103986-22abb7d7ea1c?w=600', '1kg'],
+    ['Green Peas', 'Vegetables', 'https://images.unsplash.com/photo-1587735243615-c03f25aaff15?w=600', '500g'],
+    ['Cucumber', 'Vegetables', 'https://images.unsplash.com/photo-1449300079323-02e209d9d3a6?w=600', '1kg'],
+    ['Apple', 'Fruits', 'https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?w=600', '1kg'],
+    ['Banana', 'Fruits', 'https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?w=600', '1 dozen'],
+    ['Orange', 'Fruits', 'https://images.unsplash.com/photo-1547514701-42782101795e?w=600', '1kg'],
+    ['Mango', 'Fruits', 'https://images.unsplash.com/photo-1553279768-865429fa0078?w=600', '1kg'],
+    ['Grapes', 'Fruits', 'https://images.unsplash.com/photo-1537640538966-79f369143f8f?w=600', '500g'],
+    ['Pomegranate', 'Fruits', 'https://images.unsplash.com/photo-1541344999736-83eca272f6fc?w=600', '1kg'],
+    ['Papaya', 'Fruits', 'https://images.unsplash.com/photo-1526318472351-c75fcf070305?w=600', '1 piece'],
+    ['Watermelon', 'Fruits', 'https://images.unsplash.com/photo-1563114773-84221bd62daa?w=600', '1 piece'],
+    ['Guava', 'Fruits', 'https://images.unsplash.com/photo-1536511132770-e5058c7e8c46?w=600', '1kg'],
+    ['Pineapple', 'Fruits', 'https://images.unsplash.com/photo-1550258987-190a2d41a8ba?w=600', '1 piece'],
+    ['Rice', 'Groceries', 'https://images.unsplash.com/photo-1586201375761-83865001e31c?w=600', '5kg'],
+    ['Wheat Flour', 'Groceries', 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=600', '5kg'],
+    ['Toor Dal', 'Groceries', 'https://images.unsplash.com/photo-1515543904379-3d757afe72e4?w=600', '1kg'],
+    ['Chana Dal', 'Groceries', 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=600', '1kg'],
+    ['Moong Dal', 'Groceries', 'https://images.unsplash.com/photo-1612257999756-6f32a4f0a6f8?w=600', '1kg'],
+    ['Sugar', 'Groceries', 'https://images.unsplash.com/photo-1581441363689-1f3c3c414635?w=600', '1kg'],
+    ['Salt', 'Groceries', 'https://images.unsplash.com/photo-1518110925495-5fe2eae8dfd4?w=600', '1kg'],
+    ['Turmeric Powder', 'Groceries', 'https://images.unsplash.com/photo-1615485500704-8e990f9900f7?w=600', '200g'],
+    ['Red Chili Powder', 'Groceries', 'https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=600', '200g'],
+    ['Cooking Oil', 'Groceries', 'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=600', '1 litre'],
+    ['Milk', 'Dairy', 'https://images.unsplash.com/photo-1550583724-b2692b85b150?w=600', '1 litre'],
+    ['Curd', 'Dairy', 'https://images.unsplash.com/photo-1488477181946-6428a0291777?w=600', '500g'],
+    ['Paneer', 'Dairy', 'https://images.unsplash.com/photo-1631452180519-c014fe946bc7?w=600', '200g'],
+    ['Butter', 'Dairy', 'https://images.unsplash.com/photo-1589985270958-16d90f5d7a9c?w=600', '100g'],
+    ['Cheese', 'Dairy', 'https://images.unsplash.com/photo-1486297678162-eb2a19b0a32d?w=600', '200g'],
+    ['Eggs', 'Dairy', 'https://images.unsplash.com/photo-1506976785307-8732e854ad03?w=600', '12 pieces'],
+    ['Tea', 'Beverages', 'https://images.unsplash.com/photo-1594631252845-29fc4cc8cde9?w=600', '250g'],
+    ['Coffee', 'Beverages', 'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=600', '200g'],
+    ['Fruit Juice', 'Beverages', 'https://images.unsplash.com/photo-1600271886742-f049cd451bba?w=600', '1 litre'],
+    ['Coconut Water', 'Beverages', 'https://images.unsplash.com/photo-1580984969071-a8da8c6b5c1d?w=600', '1 bottle'],
+    ['Biscuits', 'Snacks', 'https://images.unsplash.com/photo-1558961363-fa8fdf82db35?w=600', '1 pack'],
+    ['Potato Chips', 'Snacks', 'https://images.unsplash.com/photo-1566478989037-eec170784d0b?w=600', '1 pack'],
+    ['Namkeen', 'Snacks', 'https://images.unsplash.com/photo-1621939514649-280e2aa9f2a4?w=600', '200g'],
+    ['Bread', 'Snacks', 'https://images.unsplash.com/photo-1549931319-a545dcf3bc73?w=600', '1 loaf'],
+  ];
+  foreach ($catalog as $item) {
+    db_exec("INSERT INTO product_catalog (name, category, image, unit) VALUES (:name, :category, :image, :unit)", [
+      ':name' => $item[0], ':category' => $item[1], ':image' => $item[2], ':unit' => $item[3],
+    ]);
+  }
+  return db_all("SELECT * FROM product_catalog ORDER BY id");
+}
 function orders(): array               { return db_all("SELECT * FROM orders ORDER BY id"); }
 function vendors_list(): array         { return db_all("SELECT * FROM vendors ORDER BY id"); }
 function suppliers_list(): array       { return db_all("SELECT * FROM suppliers ORDER BY id"); }
