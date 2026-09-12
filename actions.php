@@ -85,7 +85,22 @@ switch ($do) {
 
   /* -------------------------------- vendor -------------------------------- */
   case 'product_add':
-    $data = $_POST + ['vendor' => $user['shopName'] ?? ''];
+    if (!$user || ($user['role'] ?? '') !== 'vendor') { header('Location: login.php'); exit; }
+    $data = $_POST;
+    $sourceId = (int) ($_POST['source_id'] ?? 0);
+    if ($sourceId) {
+      $source = find_by_id(products(), $sourceId);
+      if ($source) {
+        $data = array_merge([
+          'name'     => $source['name'],
+          'category' => $source['category'],
+          'price'    => $source['price'],
+          'unit'     => $source['unit'],
+          'image'    => $source['image'],
+        ], $data);
+      }
+    }
+    $data['vendor'] = $user['shopName'] ?? '';
     $img  = save_uploaded_image('image_file');
     if ($img) $data['image'] = $img;
     product_add($data);

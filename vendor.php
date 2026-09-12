@@ -29,6 +29,8 @@ $shownOrders  = $statusFilter === 'All' ? $vendorOrders : array_values(array_fil
 
 $editProduct = isset($_GET['edit']) ? find_by_id($vendorProducts, (int) $_GET['edit']) : null;
 $showForm    = isset($_GET['new']) || $editProduct;
+$catalogProducts = products();
+$formProduct = $editProduct ?: (isset($_GET['source']) ? find_by_id($catalogProducts, (int) $_GET['source']) : null);
 $CATS = category_names();
 
 // Real notifications
@@ -125,11 +127,29 @@ render_dashboard_start($shell);
         <form method="post" action="actions.php" enctype="multipart/form-data" class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <input type="hidden" name="do" value="<?= $editProduct ? 'product_update' : 'product_add' ?>" />
           <?php if ($editProduct): ?><input type="hidden" name="id" value="<?= e($editProduct['id']) ?>" /><?php endif; ?>
-          <div><label class="block text-sm font-medium mb-1">Name</label><input name="name" required value="<?= e($editProduct['name'] ?? '') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
-          <div><label class="block text-sm font-medium mb-1">Category</label><select name="category" class="w-full border rounded-lg px-3 py-2"><?php foreach ($CATS as $c): ?><option <?= ($editProduct['category'] ?? '') === $c ? 'selected' : '' ?>><?= e($c) ?></option><?php endforeach; ?></select></div>
-          <div><label class="block text-sm font-medium mb-1">Price (₹)</label><input name="price" type="number" min="0" required value="<?= e($editProduct['price'] ?? '') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
-          <div><label class="block text-sm font-medium mb-1">Stock</label><input name="stock" type="number" min="0" required value="<?= e($editProduct['stock'] ?? '') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
-          <div><label class="block text-sm font-medium mb-1">Unit</label><input name="unit" value="<?= e($editProduct['unit'] ?? '1kg') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
+          <?php if (!$editProduct): ?>
+            <input type="hidden" name="source_id" id="source-product-id" value="<?= e($formProduct['id'] ?? '') ?>" />
+            <div class="md:col-span-2">
+              <label for="catalog-search" class="block text-sm font-medium mb-1">Search the product catalogue</label>
+              <input id="catalog-search" type="search" placeholder="Search by product name or category..." class="w-full border rounded-lg px-3 py-2" />
+              <div id="catalog-products" class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 max-h-80 overflow-y-auto">
+                <?php foreach ($catalogProducts as $catalogProduct): ?>
+                  <button type="button" data-catalog-product data-name="<?= e(mb_strtolower($catalogProduct['name'])) ?>" data-category="<?= e(mb_strtolower($catalogProduct['category'])) ?>" data-id="<?= e($catalogProduct['id']) ?>" data-product-name="<?= e($catalogProduct['name']) ?>" data-product-category="<?= e($catalogProduct['category']) ?>" data-product-price="<?= e($catalogProduct['price']) ?>" data-product-unit="<?= e($catalogProduct['unit']) ?>" class="text-left border rounded-lg overflow-hidden hover:border-green-500 hover:bg-green-50">
+                    <img src="<?= e($catalogProduct['image']) ?>" alt="<?= e($catalogProduct['name']) ?>" class="w-full h-20 object-cover" />
+                    <span class="block px-2 py-1.5 text-sm font-medium truncate"><?= e($catalogProduct['name']) ?></span>
+                    <span class="block px-2 pb-2 text-xs text-gray-500 truncate"><?= e($catalogProduct['category']) ?></span>
+                  </button>
+                <?php endforeach; ?>
+              </div>
+              <?php if (!$catalogProducts): ?><p class="text-sm text-gray-400 mt-2">No catalogue products are available yet.</p><?php endif; ?>
+              <p class="text-xs text-gray-400 mt-2">Choose an image to fill the form, then set your store price and stock.</p>
+            </div>
+          <?php endif; ?>
+          <div><label class="block text-sm font-medium mb-1">Name</label><input id="product-name" name="name" required value="<?= e($formProduct['name'] ?? '') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
+          <div><label class="block text-sm font-medium mb-1">Category</label><select id="product-category" name="category" class="w-full border rounded-lg px-3 py-2"><?php foreach ($CATS as $c): ?><option <?= ($formProduct['category'] ?? '') === $c ? 'selected' : '' ?>><?= e($c) ?></option><?php endforeach; ?></select></div>
+          <div><label class="block text-sm font-medium mb-1">Price (₹)</label><input id="product-price" name="price" type="number" min="0" required value="<?= e($formProduct['price'] ?? '') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
+          <div><label class="block text-sm font-medium mb-1">Stock</label><input name="stock" type="number" min="0" required value="<?= e($formProduct['stock'] ?? '') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
+          <div><label class="block text-sm font-medium mb-1">Unit</label><input id="product-unit" name="unit" value="<?= e($formProduct['unit'] ?? '1kg') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
           <div>
             <label class="block text-sm font-medium mb-1">Product image</label>
             <input type="file" name="image_file" accept="image/jpeg,image/png,image/webp,image/gif" class="w-full border rounded-lg px-3 py-2 text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-green-50 file:text-green-700 file:px-3 file:py-1.5 file:cursor-pointer" />
@@ -143,6 +163,28 @@ render_dashboard_start($shell);
           <?php endif; ?>
           <div class="md:col-span-2 flex gap-3"><button class="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-lg"><?= $editProduct ? 'Save Changes' : 'Add Product' ?></button><a href="vendor.php?tab=products" class="px-5 py-2 border rounded-lg hover:bg-gray-50">Cancel</a></div>
         </form>
+        <?php if (!$editProduct): ?>
+          <script>
+            const catalogSearch = document.getElementById('catalog-search');
+            const catalogCards = document.querySelectorAll('[data-catalog-product]');
+            catalogSearch?.addEventListener('input', () => {
+              const query = catalogSearch.value.toLowerCase().trim();
+              catalogCards.forEach((card) => {
+                const matches = `${card.dataset.name} ${card.dataset.category}`.includes(query);
+                card.classList.toggle('hidden', !matches);
+              });
+            });
+            catalogCards.forEach((card) => card.addEventListener('click', () => {
+              document.getElementById('source-product-id').value = card.dataset.id;
+              document.getElementById('product-name').value = card.dataset.productName;
+              document.getElementById('product-price').value = card.dataset.productPrice;
+              document.getElementById('product-unit').value = card.dataset.productUnit;
+              const category = document.getElementById('product-category');
+              category.value = card.dataset.productCategory;
+              card.classList.add('border-green-600', 'bg-green-50');
+            }));
+          </script>
+        <?php endif; ?>
       </div>
     <?php endif; ?>
 
