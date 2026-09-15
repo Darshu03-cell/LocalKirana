@@ -6,6 +6,7 @@ $user = require_role('superadmin');
 $tab  = $_GET['tab'] ?? 'dashboard';
 
 $allOrders = orders();
+$offerList = offers();
 
 // ---- filters (orders tab) ----
 $statusFilter = $_GET['status'] ?? 'All';
@@ -158,6 +159,7 @@ $shell = [
   'nav' => [
     ['id' => 'dashboard', 'icon' => 'layout-dashboard', 'label' => 'Overview'],
     ['id' => 'orders',    'icon' => 'shopping-cart',    'label' => 'All Orders', 'badge' => $counts['Pending'] ? (string) $counts['Pending'] : null],
+    ['id' => 'offers',    'icon' => 'badge-percent',     'label' => 'Offers', 'badge' => $offerList ? (string) count($offerList) : null],
     ['id' => 'returns',   'icon' => 'undo-2',           'label' => 'Returns', 'badge' => $pendingReturns ? (string) $pendingReturns : null],
     ['id' => 'customers', 'icon' => 'users',            'label' => 'Customers'],
   ],
@@ -250,6 +252,33 @@ render_dashboard_start($shell);
           <div id="od-<?= so_order_slug($o['id']) ?>" class="hidden"><?= so_order_detail_html($o, $qs) ?></div>
         <?php endforeach; ?>
       <?php else: empty_state('No orders match these filters.', 'shopping-cart'); endif; ?>
+    </div>
+  </div>
+
+<?php elseif ($tab === 'offers'): ?>
+  <div class="space-y-6 max-w-4xl">
+    <div class="bg-white rounded-xl border p-6">
+      <div class="flex items-center gap-2 mb-1"><i data-lucide="badge-percent" class="w-5 h-5 text-green-600"></i><h3 class="font-bold text-lg">Create an Offer</h3></div>
+      <p class="text-sm text-gray-500 mb-4">Publish a promotion that customers will see on the main shopping page.</p>
+      <form method="post" action="actions.php" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <input type="hidden" name="do" value="offer_add" />
+        <input type="hidden" name="redirect" value="superadmin.php?tab=offers" />
+        <div><label class="block text-sm font-medium mb-1">Offer Title</label><input name="title" required placeholder="Weekend Grocery Sale" class="w-full border rounded-lg px-3 py-2" /></div>
+        <div><label class="block text-sm font-medium mb-1">Discount</label><input name="discount" required placeholder="20% OFF" class="w-full border rounded-lg px-3 py-2" /></div>
+        <div><label class="block text-sm font-medium mb-1">Coupon Code <span class="text-xs text-gray-400">(optional)</span></label><input name="code" placeholder="WEEKEND20" class="w-full border rounded-lg px-3 py-2" /></div>
+        <div><label class="block text-sm font-medium mb-1">Description</label><input name="description" placeholder="Save on everyday essentials" class="w-full border rounded-lg px-3 py-2" /></div>
+        <div><label class="block text-sm font-medium mb-1">Starts</label><input name="start_date" type="date" required value="<?= date('Y-m-d') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
+        <div><label class="block text-sm font-medium mb-1">Ends</label><input name="end_date" type="date" required value="<?= date('Y-m-d', strtotime('+30 days')) ?>" class="w-full border rounded-lg px-3 py-2" /></div>
+        <div class="md:col-span-2"><button class="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-lg">Publish Offer</button></div>
+      </form>
+    </div>
+    <div class="bg-white rounded-xl border p-6">
+      <h3 class="font-bold text-lg mb-4">Published Offers</h3>
+      <?php if ($offerList): ?>
+        <div class="divide-y">
+          <?php foreach ($offerList as $offer): ?><div class="py-3 flex items-center justify-between gap-4"><div><p class="font-medium"><?= e($offer['title']) ?> <span class="text-green-700 ml-2"><?= e($offer['discount']) ?></span></p><p class="text-sm text-gray-500"><?= e($offer['description']) ?></p></div><span class="text-xs text-gray-500 whitespace-nowrap"><?= e($offer['start_date']) ?> to <?= e($offer['end_date']) ?></span></div><?php endforeach; ?>
+        </div>
+      <?php else: ?><p class="text-sm text-gray-500">No offers published yet.</p><?php endif; ?>
     </div>
   </div>
 

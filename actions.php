@@ -223,6 +223,20 @@ switch ($do) {
     header('Location: ' . safe_redirect('admin.php?tab=setup'));
     exit;
 
+  case 'offer_add':
+    if (!$user || !in_array($user['role'] ?? '', ['admin', 'superadmin'], true)) { header('Location: login.php'); exit; }
+    $start = trim($_POST['start_date'] ?? '');
+    $end = trim($_POST['end_date'] ?? '');
+    if ($start === '' || $end === '' || $end < $start) {
+      set_flash('Please choose a valid offer date range.', 'error');
+      header('Location: ' . safe_redirect($_POST['redirect'] ?? 'index.php'));
+      exit;
+    }
+    offer_add($_POST + ['created_by' => $user['name'] ?? $user['email'] ?? '']);
+    set_flash('Offer published for customers.');
+    header('Location: ' . safe_redirect($_POST['redirect'] ?? 'index.php'));
+    exit;
+
   case 'account_revoke':
     if (!$user || ($user['role'] ?? '') !== 'admin') { header('Location: login.php'); exit; }
     $target = strtolower(trim($_POST['email'] ?? ''));

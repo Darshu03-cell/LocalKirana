@@ -32,6 +32,26 @@ function brand_tagline(): string {
 
 /* --------------------------------- getters --------------------------------- */
 function products(): array             { return db_all("SELECT * FROM products ORDER BY id"); }
+function offers(): array               { return db_all("SELECT * FROM offers ORDER BY id DESC"); }
+function active_offers(): array {
+  $today = date('Y-m-d');
+  return db_all("SELECT * FROM offers WHERE start_date <= :today AND end_date >= :today ORDER BY id DESC", [':today' => $today]);
+}
+function offer_add(array $data): void {
+  $start = trim($data['start_date'] ?? '') ?: date('Y-m-d');
+  $end = trim($data['end_date'] ?? '') ?: date('Y-m-d', strtotime('+30 days'));
+  db_exec("INSERT INTO offers (title, description, discount, code, start_date, end_date, created_by, created_at)
+           VALUES (:title, :description, :discount, :code, :start_date, :end_date, :created_by, :created_at)", [
+    ':title' => trim($data['title'] ?? '') ?: 'Special Offer',
+    ':description' => trim($data['description'] ?? ''),
+    ':discount' => trim($data['discount'] ?? ''),
+    ':code' => strtoupper(trim($data['code'] ?? '')),
+    ':start_date' => $start,
+    ':end_date' => $end,
+    ':created_by' => trim($data['created_by'] ?? ''),
+    ':created_at' => date('Y-m-d H:i:s'),
+  ]);
+}
 function catalog_products(): array {
   $rows = db_all("SELECT * FROM product_catalog ORDER BY id");
   if ($rows) return $rows;

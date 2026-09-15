@@ -5,6 +5,7 @@ $search = trim($_GET['q'] ?? '');
 $cat    = trim($_GET['cat'] ?? '');
 $allProducts = products();
 $allVendors  = vendors_list();
+$activeOffers = active_offers();
 
 $filteredProducts = array_values(array_filter($allProducts, function ($p) use ($search, $cat) {
   $matchSearch = $search === ''
@@ -101,6 +102,23 @@ require __DIR__ . '/partials/head.php';
       </div>
     </div>
   </section>
+
+  <!-- Offers -->
+  <?php if ($activeOffers): ?>
+    <section class="py-10 bg-amber-50 border-y border-amber-100">
+      <div class="max-w-7xl mx-auto px-4">
+        <div class="flex items-center gap-2 mb-5"><i data-lucide="badge-percent" class="w-6 h-6 text-amber-600"></i><h2 class="text-2xl font-bold text-gray-900">Offers for You</h2></div>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <?php foreach ($activeOffers as $offer): ?>
+            <div class="bg-white border border-amber-200 rounded-xl p-5 flex items-start justify-between gap-4 shadow-sm">
+              <div><p class="text-xs font-semibold uppercase tracking-wide text-amber-600 mb-1"><?= e($offer['discount']) ?></p><h3 class="font-bold text-gray-900"><?= e($offer['title']) ?></h3><?php if ($offer['description'] !== ''): ?><p class="text-sm text-gray-500 mt-1"><?= e($offer['description']) ?></p><?php endif; ?><?php if ($offer['code'] !== ''): ?><p class="inline-flex mt-3 bg-gray-100 rounded px-2 py-1 text-xs font-mono font-semibold text-gray-700">Code: <?= e($offer['code']) ?></p><?php endif; ?></div>
+              <a href="#products" class="shrink-0 text-sm font-medium text-green-700 hover:text-green-800">Shop now</a>
+            </div>
+          <?php endforeach; ?>
+        </div>
+      </div>
+    </section>
+  <?php endif; ?>
 
   <!-- Nearby Stores -->
   <section id="stores" class="py-14 bg-gray-50">
