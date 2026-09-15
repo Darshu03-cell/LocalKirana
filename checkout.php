@@ -58,6 +58,35 @@ require __DIR__ . '/partials/head.php';
           <p class="text-gray-600 text-sm mt-1"><?= e($address) ?></p>
         </div>
 
+        <!-- Delivery option -->
+        <div class="bg-white rounded-xl border p-6">
+          <h3 class="font-semibold text-lg mb-1">Choose Your Delivery Option</h3>
+          <p class="text-gray-600 mb-4">How would you like to receive your order?</p>
+          <div class="grid gap-3 md:grid-cols-2">
+            <label class="flex items-start gap-3 border rounded-xl p-4 cursor-pointer hover:border-green-400 has-[:checked]:border-green-500 has-[:checked]:bg-green-50">
+              <input type="radio" name="delivery_option" value="Walk & Collect" class="mt-1 accent-green-600" checked />
+              <div class="flex-1">
+                <div class="flex items-center gap-2 font-semibold text-base">
+                  <span class="text-xl">🚶</span>
+                  <span>Walk & Collect</span>
+                </div>
+                <p class="text-sm text-gray-600 mt-1">Walk to the store and collect your order yourself.</p>
+              </div>
+            </label>
+
+            <label class="flex items-start gap-3 border rounded-xl p-4 cursor-pointer hover:border-green-400 has-[:checked]:border-green-500 has-[:checked]:bg-green-50">
+              <input type="radio" name="delivery_option" value="Choose Delivery Partner" class="mt-1 accent-green-600" />
+              <div class="flex-1">
+                <div class="flex items-center gap-2 font-semibold text-base">
+                  <span class="text-xl">🚚</span>
+                  <span>Choose Delivery Partner</span>
+                </div>
+                <p class="text-sm text-gray-600 mt-1">Select a delivery partner to have your order delivered to your location.</p>
+              </div>
+            </label>
+          </div>
+        </div>
+
         <!-- Payment method -->
         <div class="bg-white rounded-xl border p-6">
           <h3 class="font-semibold text-lg mb-4 flex items-center gap-2"><i data-lucide="credit-card" class="w-5 h-5 text-green-600"></i>Payment method</h3>

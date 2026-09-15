@@ -22,9 +22,16 @@ switch ($do) {
     }
     $allowed = ['Cash on Delivery', 'UPI', 'Card', 'Net Banking', 'Wallet'];
     $payment = in_array($_POST['payment'] ?? '', $allowed, true) ? $_POST['payment'] : 'Cash on Delivery';
-    $num = place_order($user, $payment);
+
+    $deliveryOptions = ['Walk & Collect', 'Choose Delivery Partner', 'Choose a Delivery Partner'];
+    $deliveryOption = trim((string) ($_POST['delivery_option'] ?? ''));
+    if (!in_array($deliveryOption, $deliveryOptions, true)) {
+      $deliveryOption = 'Walk & Collect';
+    }
+
+    $num = place_order($user, $payment, $deliveryOption);
     if ($num) {
-      set_flash("Order $num confirmed! Payment: $payment. You can track it here.", 'success');
+      set_flash("Order $num confirmed! Payment: $payment. Delivery: $deliveryOption. You can track it here.", 'success');
       header('Location: orders.php');
     } else {
       set_flash('Your cart is empty.', 'error');

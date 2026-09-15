@@ -274,7 +274,7 @@ function order_is_prepaid(array $o): bool {
 }
 
 /** Create an order from the current cart, then empty the cart. */
-function place_order(?array $user = null, string $payment = 'Cash on Delivery'): string {
+function place_order(?array $user = null, string $payment = 'Cash on Delivery', string $deliveryOption = 'Walk & Collect'): string {
   $items = cart_items();
   if (!$items) return '';
   $max = (int) (db_row("SELECT MAX(CAST(SUBSTR(id, 5) AS INTEGER)) AS m FROM orders")['m'] ?? 0);
@@ -286,20 +286,24 @@ function place_order(?array $user = null, string $payment = 'Cash on Delivery'):
   $addr = format_address($user['address'] ?? '', $user['city'] ?? '', $user['pincode'] ?? '');
   // Prepaid methods are Paid at checkout; Cash on Delivery is Unpaid until collected.
   $payStatus = ($payment === 'Cash on Delivery') ? 'Unpaid' : 'Paid';
-  db_exec("INSERT INTO orders (id, customerId, customerName, customerEmail, vendor, vendorId, items, total, status, date, paymentMethod, paymentStatus, deliveryAddress)
-           VALUES (:id, :cid, :cn, :cemail, :v, :vid, :items, :total, 'Pending', :date, :pay, :pstatus, :addr)", [
-    ':id'      => $num,
-    ':cid'     => $user['id'] ?? 0,
-    ':cn'      => $user['name'] ?? 'Guest',
-    ':cemail'  => $user['email'] ?? '',
-    ':v'       => $vendorName,
-    ':vid'     => $vendor['id'] ?? 0,
-    ':items'   => cart_total_items(),
-    ':total'   => cart_total_price(),
-    ':date'    => date('Y-m-d'),
-    ':pay'     => $payment,
-    ':pstatus' => $payStatus,
-    ':addr'    => $addr,
+  $deliveryOption = in_array($deliveryOption, ['Walk & Collect', 'Choose Delivery Partner', 'Choose a Delivery Partner'], true)
+    ? $deliveryOption
+    : 'Walk & Collect';
+  db_exec("INSERT INTO orders (id, customerId, customerName, customerEmail, vendor, vendorId, items, total, status, date, paymentMethod, paymentStatus, deliveryAddress, deliveryOption)
+           VALUES (:id, :cid, :cn, :cemail, :v, :vid, :items, :total, 'Pending', :date, :pay, :pstatus, :addr, :dopt)", [
+    ':id'        => $num,
+    ':cid'       => $user['id'] ?? 0,
+    ':cn'        => $user['name'] ?? 'Guest',
+    ':cemail'    => $user['email'] ?? '',
+    ':v'         => $vendorName,
+    ':vid'       => $vendor['id'] ?? 0,
+    ':items'     => cart_total_items(),
+    ':total'     => cart_total_price(),
+    ':date'      => date('Y-m-d'),
+    ':pay'       => $payment,
+    ':pstatus'   => $payStatus,
+    ':addr'      => $addr,
+    ':dopt'      => $deliveryOption,
   ]);
   // Save the actual products in this order.
   foreach ($items as $it) {

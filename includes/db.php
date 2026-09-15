@@ -44,11 +44,13 @@ function db_init(PDO $pdo): void {
   )");
   $pdo->exec("CREATE TABLE IF NOT EXISTS orders (
     id TEXT PRIMARY KEY, customerId INTEGER, customerName TEXT, customerEmail TEXT, vendor TEXT, vendorId INTEGER,
-    items INTEGER, total INTEGER, status TEXT, date TEXT, paymentMethod TEXT, paymentStatus TEXT, deliveryAddress TEXT
+    items INTEGER, total INTEGER, status TEXT, date TEXT, paymentMethod TEXT, paymentStatus TEXT, deliveryAddress TEXT,
+    deliveryOption TEXT
   )");
   // Migrations for databases created before these columns existed.
   try { $pdo->exec("ALTER TABLE orders ADD COLUMN customerEmail TEXT"); } catch (Throwable $e) {}
   try { $pdo->exec("ALTER TABLE orders ADD COLUMN paymentStatus TEXT"); } catch (Throwable $e) {}
+  try { $pdo->exec("ALTER TABLE orders ADD COLUMN deliveryOption TEXT"); } catch (Throwable $e) {}
   $pdo->exec("CREATE TABLE IF NOT EXISTS suppliers (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, contact TEXT, email TEXT, phone TEXT,
     productsSupplied INTEGER, totalVendors INTEGER, rating REAL, verified INTEGER
