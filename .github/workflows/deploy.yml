@@ -10,10 +10,9 @@ name: Deploy to Hostinger (FTP)
 #     FTP_PASSWORD  = your FTP password
 #
 # NOTE ON server-dir below:
-#   kirana.meriise.org is served from the  public_html/kirana  folder, and the FTP
-#   account opens at the account home (where public_html lives), so we upload into
-#   ./public_html/kirana/ . If a deploy succeeds but the live site doesn't change,
-#   the FTP account may open INSIDE public_html — then use  ./kirana/  instead.
+#   kirana.meriise.org is served from  public_html/kirana . The FTP account opens
+#   INSIDE public_html, so we upload into  ./kirana/ . (Both ./ and
+#   ./public_html/kirana/ were tried and did not reach the live folder.)
 
 on:
   push:
@@ -33,7 +32,7 @@ jobs:
           server: ${{ secrets.FTP_SERVER }}
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          server-dir: ./public_html/kirana/
+          server-dir: ./kirana/
           # Never overwrite the live database / sessions or repo meta files.
           exclude: |
             **/.git*
