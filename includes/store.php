@@ -37,14 +37,49 @@ function active_offers(): array {
   $today = date('Y-m-d');
   return db_all("SELECT * FROM offers WHERE start_date <= :today AND end_date >= :today ORDER BY id DESC", [':today' => $today]);
 }
+function offer_find(int $id): ?array {
+  return db_row("SELECT * FROM offers WHERE id = :id", [':id' => $id]);
+}
+/** Human-readable label for an offer's discount, e.g. "20% OFF" or "₹50 OFF". */
+function offer_discount_text(string $type, int $value): string {
+  return $type === 'percent' ? ($value . '% OFF') : ('₹' . $value . ' OFF');
+}
+/** The rupee discount an offer gives on a given subtotal (0 if it doesn't apply). */
+function offer_discount_amount(array $offer, int $subtotal): int {
+  $min = (int) ($offer['min_order'] ?? 0);
+  if ($subtotal < $min) return 0;
+  $type  = $offer['discount_type'] ?? '';
+  $value = (int) ($offer['discount_value'] ?? 0);
+  if ($value <= 0) return 0;
+  $amount = $type === 'percent' ? (int) floor($subtotal * $value / 100) : $value;
+  return max(0, min($amount, $subtotal)); // never discount below ₹0
+}
+/** Active offers a customer can actually use on this subtotal, best saving first. */
+function eligible_offers(int $subtotal): array {
+  $out = [];
+  foreach (active_offers() as $o) {
+    $o['_amount'] = offer_discount_amount($o, $subtotal);
+    if ($o['_amount'] > 0) $out[] = $o;
+  }
+  usort($out, fn($a, $b) => $b['_amount'] <=> $a['_amount']);
+  return $out;
+}
 function offer_add(array $data): void {
   $start = trim($data['start_date'] ?? '') ?: date('Y-m-d');
   $end = trim($data['end_date'] ?? '') ?: date('Y-m-d', strtotime('+30 days'));
-  db_exec("INSERT INTO offers (title, description, discount, code, start_date, end_date, created_by, created_at)
-           VALUES (:title, :description, :discount, :code, :start_date, :end_date, :created_by, :created_at)", [
+  $type  = ($data['discount_type'] ?? 'percent') === 'flat' ? 'flat' : 'percent';
+  $value = max(0, (int) ($data['discount_value'] ?? 0));
+  // Keep a friendly text label (falls back to any free text the admin typed).
+  $text  = trim($data['discount'] ?? '');
+  if ($text === '' && $value > 0) $text = offer_discount_text($type, $value);
+  db_exec("INSERT INTO offers (title, description, discount, discount_type, discount_value, min_order, code, start_date, end_date, created_by, created_at)
+           VALUES (:title, :description, :discount, :dtype, :dvalue, :minorder, :code, :start_date, :end_date, :created_by, :created_at)", [
     ':title' => trim($data['title'] ?? '') ?: 'Special Offer',
     ':description' => trim($data['description'] ?? ''),
-    ':discount' => trim($data['discount'] ?? ''),
+    ':discount' => $text,
+    ':dtype' => $type,
+    ':dvalue' => $value,
+    ':minorder' => max(0, (int) ($data['min_order'] ?? 0)),
     ':code' => strtoupper(trim($data['code'] ?? '')),
     ':start_date' => $start,
     ':end_date' => $end,
@@ -118,6 +153,14 @@ function delivery_partners(): array    { return db_all("SELECT * FROM delivery_p
 function supplier_products(): array    { return db_all("SELECT * FROM supplier_products ORDER BY id"); }
 function supplier_requests(): array    { return db_all("SELECT * FROM supplier_requests ORDER BY id"); }
 function deliveries(): array           { return db_all("SELECT * FROM deliveries ORDER BY id"); }
+/** Active deliveries assigned to one partner (legacy unassigned rows show to nobody). */
+function deliveries_for_partner(int $pid): array {
+  return db_all("SELECT * FROM deliveries WHERE partnerId = :pid ORDER BY id", [':pid' => $pid]);
+}
+/** The delivery_partners row for a signed-in partner, matched by login email. */
+function delivery_partner_by_email(string $email): ?array {
+  return db_row("SELECT * FROM delivery_partners WHERE lower(email) = lower(:e)", [':e' => trim($email)]);
+}
 function completed_deliveries(): array { return db_all("SELECT id, customer, amount, earnings, time FROM completed_deliveries ORDER BY cid"); }
 function approvals(): array            { return db_all("SELECT * FROM approvals ORDER BY id"); }
 
@@ -239,8 +282,8 @@ function save_uploaded_image(string $field = 'image_file'): ?string {
 }
 
 function product_add(array $data): void {
-  db_exec("INSERT INTO products (name, category, price, stock, image, vendor, rating, unit)
-           VALUES (:name, :category, :price, :stock, :image, :vendor, 0, :unit)", [
+  db_exec("INSERT INTO products (name, category, price, stock, image, vendor, rating, unit, brand, expiry, hygiene_verified)
+           VALUES (:name, :category, :price, :stock, :image, :vendor, 0, :unit, :brand, :expiry, :hygiene)", [
     ':name'     => $data['name'] ?: 'New Product',
     ':category' => $data['category'] ?: 'Groceries',
     ':price'    => (int) ($data['price'] ?? 0),
@@ -248,13 +291,16 @@ function product_add(array $data): void {
     ':image'    => $data['image'] ?: 'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?w=400',
     ':vendor'   => $data['vendor'] ?? '',
     ':unit'     => $data['unit'] ?: '1 unit',
+    ':brand'    => trim($data['brand'] ?? ''),
+    ':expiry'   => trim($data['expiry'] ?? ''),
+    ':hygiene'  => !empty($data['hygiene_verified']) ? 1 : 0,
   ]);
 }
 
 function product_update(int $id, array $data): void {
   $p = db_row("SELECT * FROM products WHERE id = :id", [':id' => $id]);
   if (!$p) return;
-  db_exec("UPDATE products SET name = :name, category = :category, price = :price, stock = :stock, unit = :unit, image = :image WHERE id = :id", [
+  db_exec("UPDATE products SET name = :name, category = :category, price = :price, stock = :stock, unit = :unit, image = :image, brand = :brand, expiry = :expiry, hygiene_verified = :hygiene WHERE id = :id", [
     ':name'     => $data['name'] ?: $p['name'],
     ':category' => $data['category'] ?: $p['category'],
     ':price'    => (int) ($data['price'] ?? 0),
@@ -262,8 +308,34 @@ function product_update(int $id, array $data): void {
     ':unit'     => !empty($data['unit']) ? $data['unit'] : $p['unit'],
     // Keep the existing image unless a new one was provided (uploaded).
     ':image'    => !empty($data['image']) ? $data['image'] : $p['image'],
+    ':brand'    => trim($data['brand'] ?? ''),
+    ':expiry'   => trim($data['expiry'] ?? ''),
+    ':hygiene'  => !empty($data['hygiene_verified']) ? 1 : 0,
     ':id'       => $id,
   ]);
+}
+
+/** Toggle the admin "hygiene certified" flag on a product; returns the new state. */
+function product_toggle_hygiene(int $id): bool {
+  $p = db_row("SELECT hygiene_verified FROM products WHERE id = :id", [':id' => $id]);
+  if (!$p) return false;
+  $new = empty($p['hygiene_verified']) ? 1 : 0;
+  db_exec("UPDATE products SET hygiene_verified = :h WHERE id = :id", [':h' => $new, ':id' => $id]);
+  return (bool) $new;
+}
+
+/** Toggle a vendor's hygiene-certified flag; returns the new state. */
+function vendor_toggle_hygiene(int $id): bool {
+  $v = db_row("SELECT hygiene_verified FROM vendors WHERE id = :id", [':id' => $id]);
+  if (!$v) return false;
+  $new = empty($v['hygiene_verified']) ? 1 : 0;
+  db_exec("UPDATE vendors SET hygiene_verified = :h WHERE id = :id", [':h' => $new, ':id' => $id]);
+  return (bool) $new;
+}
+
+/** The vendor record for a given shop name (used to reach the owner's login email). */
+function vendor_by_name(string $name): ?array {
+  return db_row("SELECT * FROM vendors WHERE name = :n", [':n' => $name]);
 }
 
 function product_delete(int $id): void {
@@ -274,6 +346,11 @@ function product_delete(int $id): void {
 
 function order_set_status(string $id, string $status): void {
   db_exec("UPDATE orders SET status = :s WHERE id = :id", [':s' => $status, ':id' => $id]);
+  // Let the customer know their order moved along.
+  $o = db_row("SELECT customerEmail FROM orders WHERE id = :id", [':id' => $id]);
+  if ($o && !empty($o['customerEmail'])) {
+    notify('customer', $o['customerEmail'], "Order $id is now $status", "Track your order anytime.", 'orders.php');
+  }
 }
 
 function order_set_payment_status(string $id, string $status): void {
@@ -293,24 +370,39 @@ function order_is_prepaid(array $o): bool {
   return ($o['paymentMethod'] ?? '') !== 'Cash on Delivery' && ($o['paymentMethod'] ?? '') !== '';
 }
 
-/** Create an order from the current cart, then empty the cart. */
-function place_order(?array $user = null, string $payment = 'Cash on Delivery', string $deliveryOption = 'Walk & Collect'): string {
+/**
+ * Create an order from the current cart, then empty the cart.
+ * $discount   – rupee discount already validated by the caller (from an offer).
+ * $offerCode  – the code/label of the applied offer (for the record).
+ * $partner    – delivery_partners row when the customer chose Home Delivery.
+ */
+function place_order(?array $user = null, string $payment = 'Cash on Delivery', string $deliveryOption = 'Self Pickup',
+                     int $discount = 0, string $offerCode = '', ?array $partner = null): string {
   $items = cart_items();
   if (!$items) return '';
   $max = (int) (db_row("SELECT MAX(CAST(SUBSTR(id, 5) AS INTEGER)) AS m FROM orders")['m'] ?? 0);
   $num = '#ORD' . str_pad((string) ($max + 1), 3, '0', STR_PAD_LEFT);
-  $first = $items[array_key_first($items)];
-  $vendorName = $first['vendor'] ?? '';
-  $vendor = db_row("SELECT id FROM vendors WHERE name = :n", [':n' => $vendorName]);
+
+  // One cart can hold items from several stores. Record each distinct store;
+  // when there is more than one we label the order "Multiple Stores".
+  $storeNames = [];
+  foreach ($items as $it) { $s = trim($it['vendor'] ?? ''); if ($s !== '') $storeNames[$s] = true; }
+  $storeNames = array_keys($storeNames);
+  $vendorName = count($storeNames) === 1 ? $storeNames[0] : (count($storeNames) > 1 ? 'Multiple Stores' : '');
+  $vendor = count($storeNames) === 1 ? db_row("SELECT id FROM vendors WHERE name = :n", [':n' => $vendorName]) : null;
+
   // Build a full delivery address from the customer's saved profile.
   $addr = format_address($user['address'] ?? '', $user['city'] ?? '', $user['pincode'] ?? '');
   // Prepaid methods are Paid at checkout; Cash on Delivery is Unpaid until collected.
   $payStatus = ($payment === 'Cash on Delivery') ? 'Unpaid' : 'Paid';
-  $deliveryOption = in_array($deliveryOption, ['Walk & Collect', 'Choose Delivery Partner', 'Choose a Delivery Partner'], true)
-    ? $deliveryOption
-    : 'Walk & Collect';
-  db_exec("INSERT INTO orders (id, customerId, customerName, customerEmail, vendor, vendorId, items, total, status, date, paymentMethod, paymentStatus, deliveryAddress, deliveryOption)
-           VALUES (:id, :cid, :cn, :cemail, :v, :vid, :items, :total, 'Pending', :date, :pay, :pstatus, :addr, :dopt)", [
+  $deliveryOption = in_array($deliveryOption, ['Self Pickup', 'Home Delivery'], true) ? $deliveryOption : 'Self Pickup';
+
+  $subtotal = cart_total_price();
+  $discount = max(0, min($discount, $subtotal));
+  $total    = $subtotal - $discount;
+
+  db_exec("INSERT INTO orders (id, customerId, customerName, customerEmail, vendor, vendorId, items, total, status, date, paymentMethod, paymentStatus, deliveryAddress, deliveryOption, discount, offerCode, deliveryPartnerId, deliveryPartner)
+           VALUES (:id, :cid, :cn, :cemail, :v, :vid, :items, :total, 'Pending', :date, :pay, :pstatus, :addr, :dopt, :disc, :ocode, :pid, :pname)", [
     ':id'        => $num,
     ':cid'       => $user['id'] ?? 0,
     ':cn'        => $user['name'] ?? 'Guest',
@@ -318,12 +410,16 @@ function place_order(?array $user = null, string $payment = 'Cash on Delivery', 
     ':v'         => $vendorName,
     ':vid'       => $vendor['id'] ?? 0,
     ':items'     => cart_total_items(),
-    ':total'     => cart_total_price(),
+    ':total'     => $total,
     ':date'      => date('Y-m-d'),
     ':pay'       => $payment,
     ':pstatus'   => $payStatus,
     ':addr'      => $addr,
     ':dopt'      => $deliveryOption,
+    ':disc'      => $discount,
+    ':ocode'     => $offerCode,
+    ':pid'       => $partner['id'] ?? 0,
+    ':pname'     => $partner['name'] ?? '',
   ]);
   // Save the actual products in this order.
   foreach ($items as $it) {
@@ -337,8 +433,71 @@ function place_order(?array $user = null, string $payment = 'Cash on Delivery', 
       ':vendor' => $it['vendor'] ?? '',
     ]);
   }
+
+  // For Home Delivery, create a delivery job assigned to the chosen partner.
+  if ($deliveryOption === 'Home Delivery' && $partner) {
+    db_exec("INSERT INTO deliveries (id, customer, address, amount, distance, otp, status, partnerId)
+             VALUES (:id, :c, :a, :amt, '', :otp, 'Assigned', :pid)", [
+      ':id'  => $num,
+      ':c'   => $user['name'] ?? 'Customer',
+      ':a'   => $addr,
+      ':amt' => $total,
+      ':otp' => (string) random_int(1000, 9999),
+      ':pid' => $partner['id'],
+    ]);
+  }
+
+  // ---- Notifications to everyone involved ----
+  $cust = $user['email'] ?? '';
+  notify('customer', $cust, "Order $num placed", "Your order of ₹$total is confirmed. We'll keep you posted.", 'orders.php');
+  foreach ($storeNames as $sn) {
+    $v = vendor_by_name($sn);
+    if ($v && !empty($v['email'])) {
+      notify('vendor', $v['email'], "New order $num", "You have a new order from " . ($user['name'] ?? 'a customer') . ".", 'vendor.php?tab=orders');
+    }
+  }
+  notify('admin', '', "New order $num", "₹$total · " . ($vendorName ?: 'store') . " · " . ($user['name'] ?? 'Customer'), 'admin.php');
+  notify('superadmin', '', "New order $num", "₹$total · payment: $payment", 'superadmin.php?tab=orders');
+  if ($deliveryOption === 'Home Delivery' && $partner && !empty($partner['email'])) {
+    notify('delivery', $partner['email'], "New delivery assigned: $num", "Deliver to " . ($user['name'] ?? 'customer') . ($addr ? " · $addr" : ''), 'delivery.php?tab=active');
+  }
+
   cart_clear();
   return $num;
+}
+
+/**
+ * Orders that concern a given store — either placed wholly with it, or containing
+ * at least one of its line items (multi-store orders). Each row's `items`/`total`
+ * are recomputed to just that store's share so the vendor sees their own figures.
+ */
+function vendor_orders(string $shop): array {
+  $rows = db_all(
+    "SELECT DISTINCT o.* FROM orders o
+     LEFT JOIN order_items oi ON oi.orderId = o.id
+     WHERE o.vendor = :s OR oi.vendor = :s
+     ORDER BY o.id DESC",
+    [':s' => $shop]
+  );
+  foreach ($rows as &$o) {
+    $lines = db_all("SELECT price, quantity FROM order_items WHERE orderId = :id AND vendor = :s",
+      [':id' => $o['id'], ':s' => $shop]);
+    if ($lines) {
+      $items = 0; $total = 0;
+      foreach ($lines as $l) { $items += (int) $l['quantity']; $total += (int) $l['price'] * (int) $l['quantity']; }
+      $o['items'] = $items;
+      $o['total'] = $total;
+      $o['multiStore'] = ($o['vendor'] === 'Multiple Stores');
+    }
+  }
+  unset($o);
+  return $rows;
+}
+
+/** Line items of an order that belong to one store. */
+function order_items_for_vendor(string $orderId, string $shop): array {
+  return db_all("SELECT * FROM order_items WHERE orderId = :id AND vendor = :s ORDER BY oiid",
+    [':id' => $orderId, ':s' => $shop]);
 }
 
 /** Line items for an order. */
@@ -382,6 +541,78 @@ function order_delivery_address(array $order): string {
   return '';
 }
 
+/* ----------------------- regular / family stores --------------------------- */
+
+/** Vendor ids this customer has marked as a Regular / Family Store. */
+function favorite_store_ids(string $email): array {
+  $email = strtolower(trim($email));
+  if ($email === '') return [];
+  return array_map('intval', array_column(
+    db_all("SELECT vendorId FROM favorite_stores WHERE lower(customerEmail) = :e", [':e' => $email]),
+    'vendorId'
+  ));
+}
+
+/** Is this store a Regular / Family Store for this customer? */
+function is_favorite_store(string $email, int $vendorId): bool {
+  return in_array($vendorId, favorite_store_ids($email), true);
+}
+
+/** Toggle a store as the customer's Regular / Family Store; returns the new state. */
+function favorite_store_toggle(string $email, int $vendorId): bool {
+  $email = strtolower(trim($email));
+  if ($email === '' || $vendorId <= 0) return false;
+  if (is_favorite_store($email, $vendorId)) {
+    db_exec("DELETE FROM favorite_stores WHERE lower(customerEmail) = :e AND vendorId = :v", [':e' => $email, ':v' => $vendorId]);
+    return false;
+  }
+  db_exec("INSERT OR IGNORE INTO favorite_stores (customerEmail, vendorId, created_at) VALUES (:e, :v, :c)",
+    [':e' => $email, ':v' => $vendorId, ':c' => date('Y-m-d H:i:s')]);
+  return true;
+}
+
+/** The customer's Regular / Family Stores as full vendor rows. */
+function favorite_stores_list(string $email): array {
+  $ids = favorite_store_ids($email);
+  if (!$ids) return [];
+  $in = implode(',', array_fill(0, count($ids), '?'));
+  return db_all("SELECT * FROM vendors WHERE id IN ($in) ORDER BY name", $ids);
+}
+
+/* ------------------------------ notifications ------------------------------ */
+
+/** Raise an in-app notification. For admin/superadmin pass $recipient = '' (role-wide). */
+function notify(string $role, string $recipient, string $title, string $body = '', string $link = ''): void {
+  db_exec("INSERT INTO notifications (role, recipient, title, body, link, is_read, created_at)
+           VALUES (:role, :recipient, :title, :body, :link, 0, :created_at)", [
+    ':role' => $role,
+    ':recipient' => strtolower(trim($recipient)),
+    ':title' => $title,
+    ':body' => $body,
+    ':link' => $link,
+    ':created_at' => date('Y-m-d H:i:s'),
+  ]);
+}
+
+/** Notifications for a person (by role + email), newest first. Admin/superadmin see role-wide ones too. */
+function notifications_for(string $role, string $email, int $limit = 30): array {
+  $email = strtolower(trim($email));
+  return db_all("SELECT * FROM notifications WHERE role = :role AND (recipient = :email OR recipient = '')
+                 ORDER BY id DESC LIMIT $limit", [':role' => $role, ':email' => $email]);
+}
+
+function notifications_unread_count(string $role, string $email): int {
+  $email = strtolower(trim($email));
+  return (int) (db_row("SELECT COUNT(*) c FROM notifications WHERE role = :role AND (recipient = :email OR recipient = '') AND is_read = 0",
+    [':role' => $role, ':email' => $email])['c'] ?? 0);
+}
+
+function notifications_mark_all_read(string $role, string $email): void {
+  $email = strtolower(trim($email));
+  db_exec("UPDATE notifications SET is_read = 1 WHERE role = :role AND (recipient = :email OR recipient = '')",
+    [':role' => $role, ':email' => $email]);
+}
+
 /* ------------------------------ return requests ---------------------------- */
 
 /** All return requests, newest first. */
@@ -411,14 +642,23 @@ function return_request_create(array $data): int {
     ':reason' => trim($data['reason'] ?? ''),
     ':date'   => date('Y-m-d'),
   ]);
-  return db_insert_id();
+  $newId = db_insert_id();
+  // Alert admins that there's a return to review.
+  $what = trim(($data['item'] ?? '') . ' · ' . ($data['orderId'] ?? ''), ' ·');
+  notify('admin', '', 'New return request', $what, 'admin.php');
+  notify('superadmin', '', 'New return request', $what, 'superadmin.php?tab=returns');
+  return $newId;
 }
 
 /** Update a return request's status (Requested | Approved | Rejected | Refunded). */
 function return_request_set_status(int $id, string $status): void {
   $allowed = ['Requested', 'Approved', 'Rejected', 'Refunded'];
   if (!in_array($status, $allowed, true)) return;
+  $r = db_row("SELECT * FROM return_requests WHERE id = :id", [':id' => $id]);
   db_exec("UPDATE return_requests SET status = :s WHERE id = :id", [':s' => $status, ':id' => $id]);
+  if ($r && !empty($r['customerEmail'])) {
+    notify('customer', $r['customerEmail'], "Return $status", ($r['item'] ?? '') . ' for order ' . ($r['orderId'] ?? ''), 'orders.php');
+  }
 }
 
 /** Persist a vendor's own settings (from the Settings tab) to the database. */
@@ -483,6 +723,10 @@ function delivery_advance(string $id): void {
   if (!$d) return;
   if (($d['status'] ?? '') === 'Assigned') {
     db_exec("UPDATE deliveries SET status = 'Picked Up' WHERE id = :id", [':id' => $id]);
+    $o = db_row("SELECT customerEmail FROM orders WHERE id = :id", [':id' => $id]);
+    if ($o && !empty($o['customerEmail'])) {
+      notify('customer', $o['customerEmail'], "Order $id picked up", "Your delivery partner has your order and is on the way.", 'orders.php');
+    }
   } else {
     db_exec("INSERT INTO completed_deliveries (id, customer, amount, earnings, time)
              VALUES (:id, :c, :a, :e, :t)", [
@@ -490,5 +734,7 @@ function delivery_advance(string $id): void {
       ':e'  => (int) round(((int) $d['amount']) * 0.08), ':t' => date('h:i A'),
     ]);
     db_exec("DELETE FROM deliveries WHERE id = :id", [':id' => $id]);
+    // Mark the order delivered and tell the customer (also notifies via order_set_status).
+    order_set_status($id, 'Delivered');
   }
 }

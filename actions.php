@@ -23,15 +23,45 @@ switch ($do) {
     $allowed = ['Cash on Delivery', 'UPI', 'Card', 'Net Banking', 'Wallet'];
     $payment = in_array($_POST['payment'] ?? '', $allowed, true) ? $_POST['payment'] : 'Cash on Delivery';
 
-    $deliveryOptions = ['Walk & Collect', 'Choose Delivery Partner', 'Choose a Delivery Partner'];
     $deliveryOption = trim((string) ($_POST['delivery_option'] ?? ''));
-    if (!in_array($deliveryOption, $deliveryOptions, true)) {
-      $deliveryOption = 'Walk & Collect';
+    if (!in_array($deliveryOption, ['Self Pickup', 'Home Delivery'], true)) {
+      $deliveryOption = 'Self Pickup';
     }
 
-    $num = place_order($user, $payment, $deliveryOption);
+    // Home Delivery must name a real, active delivery partner.
+    $partner = null;
+    if ($deliveryOption === 'Home Delivery') {
+      $pid = (int) ($_POST['delivery_partner_id'] ?? 0);
+      $partner = $pid ? db_row("SELECT * FROM delivery_partners WHERE id = :id", [':id' => $pid]) : null;
+      if (!$partner) {
+        set_flash('Please choose a delivery partner for Home Delivery.', 'error');
+        header('Location: checkout.php');
+        exit;
+      }
+    }
+
+    // Apply a selected offer (re-validated here — never trust the amount from the form).
+    $subtotal = cart_total_price();
+    $discount = 0; $offerCode = '';
+    $offerId  = (int) ($_POST['offer_id'] ?? 0);
+    if ($offerId) {
+      $offer     = offer_find($offerId);
+      $isActive  = $offer && in_array((int) $offer['id'], array_map('intval', array_column(active_offers(), 'id')), true);
+      $amount    = ($offer && $isActive) ? offer_discount_amount($offer, $subtotal) : 0;
+      if ($amount > 0) {
+        $discount  = $amount;
+        $offerCode = trim($offer['code'] ?? '') !== '' ? $offer['code'] : ($offer['title'] ?? '');
+      } elseif ($offer) {
+        set_flash('That offer can\'t be applied to this order. Please review your cart.', 'error');
+        header('Location: checkout.php');
+        exit;
+      }
+    }
+
+    $num = place_order($user, $payment, $deliveryOption, $discount, $offerCode, $partner);
     if ($num) {
-      set_flash("Order $num confirmed! Payment: $payment. Delivery: $deliveryOption. You can track it here.", 'success');
+      $savedMsg = $discount > 0 ? " You saved ₹$discount." : '';
+      set_flash("Order $num confirmed! Payment: $payment. $deliveryOption.$savedMsg You can track it here.", 'success');
       header('Location: orders.php');
     } else {
       set_flash('Your cart is empty.', 'error');
@@ -88,6 +118,21 @@ switch ($do) {
     }
     set_flash('Profile saved.');
     header('Location: ' . safe_redirect('profile.php'));
+    exit;
+
+  case 'toggle_favorite':
+    if (!$user || ($user['role'] ?? '') !== 'customer') { header('Location: login.php?role=customer'); exit; }
+    $vid = (int) ($_POST['vendor_id'] ?? 0);
+    $nowFav = favorite_store_toggle($user['email'] ?? '', $vid);
+    set_flash($nowFav ? 'Added to your Regular / Family Stores.' : 'Removed from your Regular / Family Stores.',
+              $nowFav ? 'success' : 'error');
+    header('Location: ' . safe_redirect('index.php#stores'));
+    exit;
+
+  case 'notifications_read':
+    if (!$user) { header('Location: login.php'); exit; }
+    notifications_mark_all_read($user['role'] ?? '', $user['email'] ?? '');
+    header('Location: ' . safe_redirect('index.php'));
     exit;
 
   /* -------------------------------- vendor -------------------------------- */
@@ -232,9 +277,25 @@ switch ($do) {
       header('Location: ' . safe_redirect($_POST['redirect'] ?? 'index.php'));
       exit;
     }
+    if ((int) ($_POST['discount_value'] ?? 0) <= 0) {
+      set_flash('Please enter a discount amount greater than zero.', 'error');
+      header('Location: ' . safe_redirect($_POST['redirect'] ?? 'index.php'));
+      exit;
+    }
     offer_add($_POST + ['created_by' => $user['name'] ?? $user['email'] ?? '']);
-    set_flash('Offer published for customers.');
+    set_flash('Offer published — customers can now apply it at checkout.');
     header('Location: ' . safe_redirect($_POST['redirect'] ?? 'index.php'));
+    exit;
+
+  case 'toggle_hygiene':
+    if (!$user || !in_array($user['role'] ?? '', ['admin', 'superadmin'], true)) { header('Location: login.php'); exit; }
+    $type = $_POST['type'] ?? '';
+    $hid  = (int) ($_POST['id'] ?? 0);
+    if ($type === 'vendor')      { $on = vendor_toggle_hygiene($hid);  $label = 'Store'; }
+    elseif ($type === 'product') { $on = product_toggle_hygiene($hid); $label = 'Product'; }
+    else { set_flash('Unknown item.', 'error'); header('Location: ' . safe_redirect('admin.php')); exit; }
+    set_flash($label . ($on ? ' marked Hygiene Certified.' : ' hygiene certification removed.'), $on ? 'success' : 'error');
+    header('Location: ' . safe_redirect($_POST['redirect'] ?? 'admin.php'));
     exit;
 
   case 'account_revoke':

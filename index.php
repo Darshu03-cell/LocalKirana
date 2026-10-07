@@ -16,9 +16,14 @@ $filteredProducts = array_values(array_filter($allProducts, function ($p) use ($
 }));
 
 $me        = current_user();
+$isCustomer = $me && ($me['role'] ?? '') === 'customer';
 $cartCount = cart_total_items();
 $brand     = brand_name();
 $cats      = $CATEGORIES ?? [];
+
+// Regular / Family Stores this customer has marked.
+$favIds    = $isCustomer ? favorite_store_ids($me['email'] ?? '') : [];
+$favStores = $isCustomer ? favorite_stores_list($me['email'] ?? '') : [];
 
 /** Small 5-star rating row. */
 function stars_html($rating): string {
@@ -29,6 +34,49 @@ function stars_html($rating): string {
     $html .= '<i data-lucide="star" class="w-3.5 h-3.5 ' . $cls . '"></i>';
   }
   return $html . '</span>';
+}
+
+/** One store card, reused for the Regular Stores row and the Nearby Stores grid. */
+function store_card(array $vendor, bool $isCustomer, array $favIds): void {
+  $isFav = in_array((int) $vendor['id'], $favIds, true);
+  ?>
+  <div class="group bg-white rounded-2xl border overflow-hidden hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 <?= $isFav ? 'border-green-300 ring-1 ring-green-200' : 'border-gray-200' ?>">
+    <div class="relative h-44 overflow-hidden">
+      <img src="<?= e($vendor['image']) ?>" alt="<?= e($vendor['name']) ?>" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+      <div class="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent"></div>
+      <div class="absolute top-3 left-3 flex flex-col items-start gap-1.5">
+        <?php if (!empty($vendor['verified'])): ?>
+          <span class="inline-flex items-center gap-1 bg-white/95 text-green-700 text-xs font-semibold px-2.5 py-1 rounded-full shadow-sm"><i data-lucide="badge-check" class="w-3.5 h-3.5"></i>Verified</span>
+        <?php endif; ?>
+        <?php if (!empty($vendor['hygiene_verified'])): ?>
+          <span class="inline-flex items-center gap-1 bg-teal-600 text-white text-xs font-semibold px-2.5 py-1 rounded-full shadow-sm"><i data-lucide="shield-check" class="w-3.5 h-3.5"></i>Hygiene Certified</span>
+        <?php endif; ?>
+        <?php if ($isFav): ?>
+          <span class="inline-flex items-center gap-1 bg-amber-500 text-white text-xs font-semibold px-2.5 py-1 rounded-full shadow-sm"><i data-lucide="heart" class="w-3.5 h-3.5 fill-white"></i>Regular Store</span>
+        <?php endif; ?>
+      </div>
+      <?php if ((float) ($vendor['rating'] ?? 0) > 0): ?>
+        <span class="absolute top-3 right-3 inline-flex items-center gap-1 bg-white/95 text-gray-800 text-xs font-semibold px-2 py-1 rounded-full shadow-sm"><i data-lucide="star" class="w-3.5 h-3.5 text-amber-400 fill-amber-400"></i><?= e(number_format((float) $vendor['rating'], 1)) ?></span>
+      <?php endif; ?>
+    </div>
+    <div class="p-5">
+      <h3 class="font-bold text-lg text-gray-900 truncate"><?= e($vendor['name']) ?></h3>
+      <p class="text-gray-500 text-sm mt-1 flex items-center gap-1.5"><i data-lucide="map-pin" class="w-4 h-4 shrink-0"></i><span class="truncate"><?= e($vendor['address'] ?: $vendor['city'] ?: 'Local store') ?></span></p>
+      <?php if (!empty($vendor['deliveryTime'])): ?><p class="text-gray-500 text-sm mt-1 flex items-center gap-1.5"><i data-lucide="clock" class="w-4 h-4 shrink-0"></i><?= e($vendor['deliveryTime']) ?></p><?php endif; ?>
+      <?php if ($isCustomer): ?>
+        <form method="post" action="actions.php" class="mt-4">
+          <input type="hidden" name="do" value="toggle_favorite" />
+          <input type="hidden" name="vendor_id" value="<?= e($vendor['id']) ?>" />
+          <input type="hidden" name="redirect" value="index.php#stores" />
+          <button class="w-full inline-flex items-center justify-center gap-2 py-2 rounded-lg font-medium transition-colors text-sm <?= $isFav ? 'bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100' : 'border border-gray-200 text-gray-600 hover:border-amber-300 hover:text-amber-700' ?>">
+            <i data-lucide="heart" class="w-4 h-4 <?= $isFav ? 'fill-amber-500 text-amber-500' : '' ?>"></i><?= $isFav ? 'Regular / Family Store' : 'Mark as Regular Store' ?>
+          </button>
+        </form>
+      <?php endif; ?>
+      <a href="index.php#products" class="mt-3 block text-center w-full border border-green-600 text-green-700 hover:bg-green-600 hover:text-white font-medium py-2 rounded-lg transition-colors">View Products</a>
+    </div>
+  </div>
+  <?php
 }
 
 $page_title = $brand;
@@ -120,37 +168,30 @@ require __DIR__ . '/partials/head.php';
     </section>
   <?php endif; ?>
 
+  <!-- Regular / Family Stores -->
+  <?php if ($isCustomer && $favStores): ?>
+    <section class="py-10 bg-white border-b border-gray-100">
+      <div class="max-w-7xl mx-auto px-4">
+        <div class="flex items-center gap-2 mb-5"><i data-lucide="heart" class="w-6 h-6 text-amber-500 fill-amber-500"></i><h2 class="text-2xl font-bold text-gray-900">Your Regular / Family Stores</h2></div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          <?php foreach ($favStores as $vendor): store_card($vendor, $isCustomer, $favIds); endforeach; ?>
+        </div>
+      </div>
+    </section>
+  <?php endif; ?>
+
   <!-- Nearby Stores -->
   <section id="stores" class="py-14 bg-gray-50">
     <div class="max-w-7xl mx-auto px-4">
       <div class="flex items-end justify-between mb-8">
         <div>
           <h2 class="text-2xl md:text-3xl font-bold text-gray-900">Stores Near You</h2>
-          <p class="text-gray-500 mt-1">Shop from trusted local kirana stores</p>
+          <p class="text-gray-500 mt-1"><?= $isCustomer ? 'Tap the heart to save a shop as your Regular / Family Store' : 'Shop from trusted local kirana stores' ?></p>
         </div>
       </div>
       <?php if ($allVendors): ?>
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          <?php foreach ($allVendors as $vendor): ?>
-            <div class="group bg-white rounded-2xl border border-gray-200 overflow-hidden hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200">
-              <div class="relative h-44 overflow-hidden">
-                <img src="<?= e($vendor['image']) ?>" alt="<?= e($vendor['name']) ?>" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
-                <div class="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent"></div>
-                <?php if ($vendor['verified']): ?>
-                  <span class="absolute top-3 left-3 inline-flex items-center gap-1 bg-white/95 text-green-700 text-xs font-semibold px-2.5 py-1 rounded-full shadow-sm"><i data-lucide="badge-check" class="w-3.5 h-3.5"></i>Verified</span>
-                <?php endif; ?>
-                <?php if ((float) ($vendor['rating'] ?? 0) > 0): ?>
-                  <span class="absolute top-3 right-3 inline-flex items-center gap-1 bg-white/95 text-gray-800 text-xs font-semibold px-2 py-1 rounded-full shadow-sm"><i data-lucide="star" class="w-3.5 h-3.5 text-amber-400 fill-amber-400"></i><?= e(number_format((float) $vendor['rating'], 1)) ?></span>
-                <?php endif; ?>
-              </div>
-              <div class="p-5">
-                <h3 class="font-bold text-lg text-gray-900 truncate"><?= e($vendor['name']) ?></h3>
-                <p class="text-gray-500 text-sm mt-1 flex items-center gap-1.5"><i data-lucide="map-pin" class="w-4 h-4 shrink-0"></i><span class="truncate"><?= e($vendor['address'] ?: $vendor['city'] ?: 'Local store') ?></span></p>
-                <?php if (!empty($vendor['deliveryTime'])): ?><p class="text-gray-500 text-sm mt-1 flex items-center gap-1.5"><i data-lucide="clock" class="w-4 h-4 shrink-0"></i><?= e($vendor['deliveryTime']) ?></p><?php endif; ?>
-                <a href="index.php#products" class="mt-4 block text-center w-full border border-green-600 text-green-700 hover:bg-green-600 hover:text-white font-medium py-2 rounded-lg transition-colors">View Products</a>
-              </div>
-            </div>
-          <?php endforeach; ?>
+          <?php foreach ($allVendors as $vendor): store_card($vendor, $isCustomer, $favIds); endforeach; ?>
         </div>
       <?php else: ?>
         <div class="bg-white rounded-2xl border border-dashed border-gray-300 p-12 text-center">
@@ -194,13 +235,25 @@ require __DIR__ . '/partials/head.php';
               <div class="relative aspect-[4/3] overflow-hidden bg-gray-100">
                 <img src="<?= e($product['image']) ?>" alt="<?= e($product['name']) ?>" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
                 <span class="absolute top-3 left-3 bg-white/95 text-gray-700 text-xs font-medium px-2 py-0.5 rounded-full shadow-sm"><?= e($product['category']) ?></span>
+                <?php if (!empty($product['hygiene_verified'])): ?>
+                  <span class="absolute top-3 right-3 inline-flex items-center gap-1 bg-teal-600 text-white text-xs font-semibold px-2 py-0.5 rounded-full shadow-sm"><i data-lucide="shield-check" class="w-3 h-3"></i>Hygiene</span>
+                <?php endif; ?>
                 <?php if ($stock <= 0): ?>
                   <div class="absolute inset-0 bg-white/60 flex items-center justify-center"><span class="bg-gray-900 text-white text-xs font-semibold px-3 py-1 rounded-full">Out of stock</span></div>
                 <?php endif; ?>
               </div>
               <div class="p-4 flex flex-col flex-1">
                 <h3 class="font-semibold text-gray-900 leading-snug line-clamp-1" title="<?= e($product['name']) ?>"><?= e($product['name']) ?></h3>
-                <p class="text-gray-500 text-xs mt-1 flex items-center gap-1"><i data-lucide="store" class="w-3.5 h-3.5"></i><span class="truncate"><?= e($product['vendor'] ?: 'Local store') ?></span></p>
+                <?php if (!empty($product['brand'])): ?>
+                  <p class="text-xs text-gray-500 mt-0.5">by <span class="font-medium text-gray-700"><?= e($product['brand']) ?></span></p>
+                <?php endif; ?>
+                <div class="mt-1.5 space-y-1 text-xs text-gray-500">
+                  <p class="flex items-center gap-1"><i data-lucide="store" class="w-3.5 h-3.5 shrink-0"></i><span class="truncate"><?= e($product['vendor'] ?: 'Local store') ?></span></p>
+                  <?php if (!empty($product['expiry'])): ?>
+                    <p class="flex items-center gap-1"><i data-lucide="calendar-clock" class="w-3.5 h-3.5 shrink-0"></i>Best before <span class="font-medium text-gray-700"><?= e($product['expiry']) ?></span></p>
+                  <?php endif; ?>
+                  <p class="flex items-center gap-1"><i data-lucide="scale" class="w-3.5 h-3.5 shrink-0"></i>Qty: <span class="font-medium text-gray-700"><?= e($product['unit']) ?></span></p>
+                </div>
                 <div class="mt-2 mb-3">
                   <?php if ((float) ($product['rating'] ?? 0) > 0): ?>
                     <?= stars_html($product['rating']) ?>
@@ -214,6 +267,8 @@ require __DIR__ . '/partials/head.php';
                     <span class="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">Only <?= $stock ?> left</span>
                   <?php elseif ($stock >= 20): ?>
                     <span class="text-xs font-medium text-green-600 bg-green-50 px-2 py-0.5 rounded-full">In stock</span>
+                  <?php else: ?>
+                    <span class="text-xs font-medium text-red-600 bg-red-50 px-2 py-0.5 rounded-full">Out of stock</span>
                   <?php endif; ?>
                 </div>
                 <?php if ($stock > 0): ?>

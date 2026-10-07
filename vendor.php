@@ -7,7 +7,8 @@ $tab  = $_GET['tab'] ?? 'dashboard';
 
 $shopName = $user['shopName'] ?? '';
 $vendorProducts = array_values(array_filter(products(), fn($p) => ($p['vendor'] ?? '') === $shopName));
-$vendorOrders   = array_values(array_filter(orders(),   fn($o) => ($o['vendor'] ?? '') === $shopName));
+// Includes multi-store orders that contain this store's items (totals are this store's share).
+$vendorOrders   = vendor_orders($shopName);
 
 // Real aggregates
 $revenue     = array_sum(array_column($vendorOrders, 'total'));
@@ -33,10 +34,8 @@ $catalogProducts = catalog_products();
 $formProduct = $editProduct ?: (isset($_GET['source']) ? find_by_id($catalogProducts, (int) $_GET['source']) : null);
 $CATS = category_names();
 
-// Real notifications
-$notifList = [];
-if ($pendingCnt)       $notifList[] = [$pendingCnt . ' pending order' . ($pendingCnt > 1 ? 's' : ''), 'Awaiting your action'];
-if (count($lowStock))  $notifList[] = [count($lowStock) . ' low-stock item' . (count($lowStock) > 1 ? 's' : ''), 'Restock soon'];
+// Real notifications (new orders, status changes, etc.)
+$nf = dashboard_notif_shell('vendor', $user['email'] ?? '');
 
 function status_badge(string $status): string {
   $map = ['Delivered' => 'bg-green-100 text-green-700', 'In Transit' => 'bg-blue-100 text-blue-700', 'Processing' => 'bg-amber-100 text-amber-700', 'Pending' => 'bg-gray-100 text-gray-700'];
@@ -50,7 +49,7 @@ foreach ($vendorOrders as $o) { $statusCounts[$o['status']] = ($statusCounts[$o[
 $shell = [
   'panelTitle' => $shopName ?: 'Vendor', 'panelSubtitle' => $user['name'], 'baseUrl' => 'vendor.php',
   'activeTab' => $tab, 'headerSubtitle' => 'Manage your store operations', 'roleLabel' => 'Vendor',
-  'userName' => $user['name'], 'notifList' => $notifList,
+  'userName' => $user['name'], 'notifList' => $nf['list'], 'notifUnread' => $nf['unread'],
   'nav' => [
     ['id' => 'dashboard', 'icon' => 'layout-dashboard', 'label' => 'Dashboard'],
     ['id' => 'products',  'icon' => 'package',          'label' => 'Products'],
@@ -149,7 +148,13 @@ render_dashboard_start($shell);
           <div><label class="block text-sm font-medium mb-1">Category</label><select id="product-category" name="category" class="w-full border rounded-lg px-3 py-2"><?php foreach ($CATS as $c): ?><option <?= ($formProduct['category'] ?? '') === $c ? 'selected' : '' ?>><?= e($c) ?></option><?php endforeach; ?></select></div>
           <div><label class="block text-sm font-medium mb-1">Price (₹)</label><input id="product-price" name="price" type="number" min="0" required value="<?= e($formProduct['price'] ?? '') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
           <div><label class="block text-sm font-medium mb-1">Stock</label><input name="stock" type="number" min="0" required value="<?= e($formProduct['stock'] ?? '') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
-          <div><label class="block text-sm font-medium mb-1">Unit</label><input id="product-unit" name="unit" value="<?= e($formProduct['unit'] ?? '1kg') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
+          <div><label class="block text-sm font-medium mb-1">Unit / Quantity</label><input id="product-unit" name="unit" value="<?= e($formProduct['unit'] ?? '1kg') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
+          <div><label class="block text-sm font-medium mb-1">Brand Name <span class="text-xs text-gray-400">(optional)</span></label><input name="brand" value="<?= e($formProduct['brand'] ?? '') ?>" placeholder="e.g. Aashirvaad, Amul" class="w-full border rounded-lg px-3 py-2" /></div>
+          <div><label class="block text-sm font-medium mb-1">Expiry / Best Before <span class="text-xs text-gray-400">(optional)</span></label><input name="expiry" value="<?= e($formProduct['expiry'] ?? '') ?>" placeholder="e.g. Dec 2026" class="w-full border rounded-lg px-3 py-2" /></div>
+          <label class="md:col-span-2 flex items-center gap-2 bg-teal-50 border border-teal-100 rounded-lg px-3 py-2.5 cursor-pointer">
+            <input type="checkbox" name="hygiene_verified" value="1" <?= !empty($editProduct['hygiene_verified']) ? 'checked' : '' ?> class="accent-teal-600 w-4 h-4" />
+            <span class="text-sm text-gray-700 flex items-center gap-1.5"><i data-lucide="shield-check" class="w-4 h-4 text-teal-600"></i>Hygiene / quality checked — show a badge to customers</span>
+          </label>
           <div>
             <label class="block text-sm font-medium mb-1">Product image</label>
             <input type="file" name="image_file" accept="image/jpeg,image/png,image/webp,image/gif" class="w-full border rounded-lg px-3 py-2 text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-green-50 file:text-green-700 file:px-3 file:py-1.5 file:cursor-pointer" />
@@ -195,8 +200,16 @@ render_dashboard_start($shell);
             <img src="<?= e($p['image']) ?>" alt="<?= e($p['name']) ?>" class="w-full h-48 object-cover" />
             <div class="p-4">
               <div class="flex items-start justify-between mb-2">
-                <div><h3 class="font-semibold"><?= e($p['name']) ?></h3><p class="text-sm text-gray-600"><?= e($p['category']) ?></p></div>
+                <div>
+                  <h3 class="font-semibold"><?= e($p['name']) ?></h3>
+                  <p class="text-sm text-gray-600"><?= e($p['category']) ?><?= !empty($p['brand']) ? ' · ' . e($p['brand']) : '' ?></p>
+                </div>
                 <span class="text-xs font-medium px-2 py-1 rounded-full <?= $p['stock'] >= 20 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700' ?>"><?= e($p['stock']) ?> units</span>
+              </div>
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500 mb-1">
+                <span>Qty: <?= e($p['unit']) ?></span>
+                <?php if (!empty($p['expiry'])): ?><span class="flex items-center gap-1"><i data-lucide="calendar-clock" class="w-3.5 h-3.5"></i><?= e($p['expiry']) ?></span><?php endif; ?>
+                <?php if (!empty($p['hygiene_verified'])): ?><span class="inline-flex items-center gap-1 text-teal-700 font-medium"><i data-lucide="shield-check" class="w-3.5 h-3.5"></i>Hygiene</span><?php endif; ?>
               </div>
               <div class="flex items-center justify-between mt-4">
                 <span class="text-xl font-bold text-green-600">₹<?= e($p['price']) ?></span>
@@ -226,7 +239,7 @@ render_dashboard_start($shell);
           <tbody>
             <?php foreach ($shownOrders as $o): ?>
               <tr class="border-b last:border-0">
-                <td class="py-3 pr-4 font-medium"><?= e($o['id']) ?></td>
+                <td class="py-3 pr-4 font-medium"><?= e($o['id']) ?><?php if (!empty($o['multiStore'])): ?><br><span class="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">Multi-store · your items</span><?php endif; ?></td>
                 <td class="py-3 pr-4"><?= e($o['customerName']) ?></td>
                 <td class="py-3 pr-4 max-w-xs truncate"><?= e(order_delivery_address($o) ?: '—') ?></td>
                 <td class="py-3 pr-4"><?= e($o['items']) ?> items</td>

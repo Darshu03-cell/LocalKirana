@@ -73,19 +73,37 @@ function render_dashboard_start(array $shell): void {
         </div>
         <div class="flex items-center gap-2 md:gap-4 shrink-0">
           <div class="relative">
+            <?php
+              $notifs = $shell['notifList'] ?? [];
+              $unread = (int) ($shell['notifUnread'] ?? 0);
+            ?>
             <button data-bell type="button" class="relative border rounded-lg p-2 hover:bg-gray-50">
               <i data-lucide="bell" class="w-5 h-5"></i>
-              <?php $notifs = $shell['notifList'] ?? []; ?>
-              <?php if ($notifs): ?><span class="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center"><?= count($notifs) ?></span><?php endif; ?>
+              <?php if ($unread > 0): ?><span class="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-semibold rounded-full min-w-[1rem] h-4 px-1 flex items-center justify-center"><?= $unread > 9 ? '9+' : $unread ?></span><?php endif; ?>
             </button>
             <div id="notif-panel" class="hidden absolute right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] bg-white border rounded-xl shadow-xl z-50">
-              <div class="px-4 py-3 border-b font-semibold text-sm">Notifications</div>
+              <div class="px-4 py-3 border-b font-semibold text-sm flex items-center justify-between">
+                <span>Notifications</span>
+                <?php if ($unread > 0): ?><span class="text-xs font-medium text-red-600"><?= $unread ?> new</span><?php endif; ?>
+              </div>
               <ul class="max-h-80 overflow-auto divide-y">
-                <?php foreach ($notifs as $n): ?>
-                  <li class="px-4 py-3 hover:bg-gray-50"><p class="text-sm font-medium"><?= e($n[0]) ?></p><p class="text-xs text-gray-500"><?= e($n[1]) ?></p></li>
+                <?php foreach ($notifs as $n): $u = !empty($n['unread']); ?>
+                  <li class="<?= $u ? 'bg-green-50/60' : '' ?>">
+                    <?php $inner = '<div class="px-4 py-3 hover:bg-gray-50"><p class="text-sm font-medium flex items-center gap-2">' . ($u ? '<span class="w-1.5 h-1.5 rounded-full bg-green-600 shrink-0"></span>' : '') . e($n['title'] ?? '') . '</p>' . (!empty($n['body']) ? '<p class="text-xs text-gray-500 mt-0.5">' . e($n['body']) . '</p>' : '') . '</div>'; ?>
+                    <?php if (!empty($n['link'])): ?><a href="<?= e($n['link']) ?>" class="block"><?= $inner ?></a><?php else: ?><?= $inner ?><?php endif; ?>
+                  </li>
                 <?php endforeach; ?>
-                <?php if (!$notifs): ?><li class="px-4 py-6 text-center text-sm text-gray-400">No new notifications</li><?php endif; ?>
+                <?php if (!$notifs): ?><li class="px-4 py-6 text-center text-sm text-gray-400">No notifications yet</li><?php endif; ?>
               </ul>
+              <?php if ($unread > 0): ?>
+                <div class="border-t px-4 py-2 text-right">
+                  <form method="post" action="actions.php">
+                    <input type="hidden" name="do" value="notifications_read" />
+                    <input type="hidden" name="redirect" value="<?= e($shell['baseUrl'] . '?tab=' . $active) ?>" />
+                    <button class="text-xs font-medium text-green-700 hover:underline">Mark all as read</button>
+                  </form>
+                </div>
+              <?php endif; ?>
             </div>
           </div>
           <div class="flex items-center gap-3">
@@ -153,6 +171,18 @@ function empty_state(string $message, string $icon = 'inbox', ?string $ctaHref =
     <?php endif; ?>
   </div>
   <?php
+}
+
+/** Build the bell's notification list + unread count for a signed-in person. */
+function dashboard_notif_shell(string $role, string $email): array {
+  $rows = notifications_for($role, $email, 12);
+  $list = array_map(fn($n) => [
+    'title'  => $n['title'],
+    'body'   => $n['body'],
+    'unread' => empty($n['is_read']),
+    'link'   => $n['link'] ?? '',
+  ], $rows);
+  return ['list' => $list, 'unread' => notifications_unread_count($role, $email)];
 }
 
 /** Emit a canvas + Chart.js init. $type = line|bar|pie. */

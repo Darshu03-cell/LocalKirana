@@ -18,6 +18,14 @@ if (!profile_complete($user)) {
 $total   = cart_total_price();
 $address = format_address($user['address'] ?? '', $user['city'] ?? '', $user['pincode'] ?? '');
 
+// Active delivery partners the customer can pick for Home Delivery.
+$partners = array_values(array_filter(delivery_partners(), fn($p) => ($p['status'] ?? '') === 'Active'));
+// Offers this cart qualifies for (best saving first).
+$availableOffers = eligible_offers($total);
+// Group the cart by store so a multi-store order is shown clearly.
+$byStore = [];
+foreach ($items as $it) { $byStore[$it['vendor'] ?: 'Local store'][] = $it; }
+
 $methods = [
   ['id' => 'Cash on Delivery', 'icon' => 'wallet',      'desc' => 'Pay with cash when your order arrives'],
   ['id' => 'UPI',              'icon' => 'smartphone',   'desc' => 'Google Pay, PhonePe, Paytm & more'],
@@ -64,27 +72,69 @@ require __DIR__ . '/partials/head.php';
           <p class="text-gray-600 mb-4">How would you like to receive your order?</p>
           <div class="grid gap-3 md:grid-cols-2">
             <label class="flex items-start gap-3 border rounded-xl p-4 cursor-pointer hover:border-green-400 has-[:checked]:border-green-500 has-[:checked]:bg-green-50">
-              <input type="radio" name="delivery_option" value="Walk & Collect" class="mt-1 accent-green-600" checked />
+              <input type="radio" name="delivery_option" value="Self Pickup" class="mt-1 accent-green-600 delivery-radio" data-option="Self Pickup" checked />
               <div class="flex-1">
                 <div class="flex items-center gap-2 font-semibold text-base">
                   <span class="text-xl">🚶</span>
-                  <span>Walk & Collect</span>
+                  <span>Self Pickup</span>
                 </div>
-                <p class="text-sm text-gray-600 mt-1">Walk to the store and collect your order yourself.</p>
+                <p class="text-sm text-gray-600 mt-1">Collect your order yourself from the store. No delivery partner needed.</p>
               </div>
             </label>
 
             <label class="flex items-start gap-3 border rounded-xl p-4 cursor-pointer hover:border-green-400 has-[:checked]:border-green-500 has-[:checked]:bg-green-50">
-              <input type="radio" name="delivery_option" value="Choose Delivery Partner" class="mt-1 accent-green-600" />
+              <input type="radio" name="delivery_option" value="Home Delivery" class="mt-1 accent-green-600 delivery-radio" data-option="Home Delivery" <?= $partners ? '' : 'disabled' ?> />
               <div class="flex-1">
                 <div class="flex items-center gap-2 font-semibold text-base">
                   <span class="text-xl">🚚</span>
-                  <span>Choose Delivery Partner</span>
+                  <span>Home Delivery</span>
                 </div>
-                <p class="text-sm text-gray-600 mt-1">Select a delivery partner to have your order delivered to your location.</p>
+                <p class="text-sm text-gray-600 mt-1">A delivery partner brings your order to your address.</p>
               </div>
             </label>
           </div>
+
+          <!-- Delivery-partner picker (shown only for Home Delivery) -->
+          <div id="partner-panel" class="hidden mt-4">
+            <?php if ($partners): ?>
+              <label class="block text-sm font-medium mb-1">Choose a delivery partner</label>
+              <select name="delivery_partner_id" id="partner-select" class="w-full border rounded-lg px-3 py-2">
+                <option value="">— Select a partner —</option>
+                <?php foreach ($partners as $p): ?>
+                  <option value="<?= e($p['id']) ?>"><?= e($p['name']) ?> · <?= e($p['vehicle'] ?: 'Bike') ?><?= (float) ($p['rating'] ?? 0) > 0 ? ' · ★ ' . e(number_format((float) $p['rating'], 1)) : '' ?></option>
+                <?php endforeach; ?>
+              </select>
+              <p class="text-xs text-gray-500 mt-1">The partner will be notified and your order appears in their deliveries.</p>
+            <?php else: ?>
+              <p class="text-sm text-amber-600">No delivery partners are available right now — please choose Self Pickup.</p>
+            <?php endif; ?>
+          </div>
+        </div>
+
+        <!-- Offers -->
+        <div class="bg-white rounded-xl border p-6">
+          <h3 class="font-semibold text-lg mb-1 flex items-center gap-2"><i data-lucide="badge-percent" class="w-5 h-5 text-green-600"></i>Apply an Offer</h3>
+          <?php if ($availableOffers): ?>
+            <p class="text-gray-600 mb-4">Pick an offer to apply to this order.</p>
+            <div class="space-y-3">
+              <label class="flex items-center gap-3 border rounded-lg p-3 cursor-pointer hover:border-green-400 has-[:checked]:border-green-500 has-[:checked]:bg-green-50">
+                <input type="radio" name="offer_id" value="0" class="accent-green-600 offer-radio" data-amount="0" checked />
+                <span class="font-medium text-sm">No offer</span>
+              </label>
+              <?php foreach ($availableOffers as $o): ?>
+                <label class="flex items-start gap-3 border rounded-lg p-3 cursor-pointer hover:border-green-400 has-[:checked]:border-green-500 has-[:checked]:bg-green-50">
+                  <input type="radio" name="offer_id" value="<?= e($o['id']) ?>" class="mt-0.5 accent-green-600 offer-radio" data-amount="<?= (int) $o['_amount'] ?>" />
+                  <div class="flex-1">
+                    <p class="font-medium text-sm"><?= e($o['title']) ?> <span class="text-green-700">· <?= e($o['discount'] ?: offer_discount_text($o['discount_type'] ?? 'percent', (int) ($o['discount_value'] ?? 0))) ?></span></p>
+                    <p class="text-xs text-gray-500"><?php if (!empty($o['code'])): ?>Code <?= e($o['code']) ?> · <?php endif; ?>You save ₹<?= (int) $o['_amount'] ?><?= (int) ($o['min_order'] ?? 0) > 0 ? ' · min order ₹' . (int) $o['min_order'] : '' ?></p>
+                  </div>
+                </label>
+              <?php endforeach; ?>
+            </div>
+          <?php else: ?>
+            <p class="text-sm text-gray-500">No offers apply to your current cart. Add more items or check back later.</p>
+            <input type="hidden" name="offer_id" value="0" />
+          <?php endif; ?>
         </div>
 
         <!-- Payment method -->
@@ -133,17 +183,28 @@ require __DIR__ . '/partials/head.php';
       <div class="space-y-6">
         <div class="bg-white rounded-xl border p-6">
           <h3 class="font-semibold text-lg mb-4">Order summary</h3>
-          <div class="space-y-3 mb-4">
-            <?php foreach ($items as $it): ?>
-              <div class="flex justify-between text-sm">
-                <span class="text-gray-600"><?= e($it['name']) ?> <span class="text-gray-400">× <?= e($it['quantity']) ?></span></span>
-                <span class="font-medium">₹<?= e($it['price'] * $it['quantity']) ?></span>
+          <?php if (count($byStore) > 1): ?>
+            <p class="text-xs text-gray-500 mb-3 inline-flex items-center gap-1"><i data-lucide="store" class="w-3.5 h-3.5"></i>Items from <?= count($byStore) ?> stores in one order</p>
+          <?php endif; ?>
+          <div class="space-y-4 mb-4">
+            <?php foreach ($byStore as $storeName => $storeItems): ?>
+              <div>
+                <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5 flex items-center gap-1"><i data-lucide="store" class="w-3.5 h-3.5"></i><?= e($storeName) ?></p>
+                <div class="space-y-2">
+                  <?php foreach ($storeItems as $it): ?>
+                    <div class="flex justify-between text-sm">
+                      <span class="text-gray-600"><?= e($it['name']) ?> <span class="text-gray-400">× <?= e($it['quantity']) ?></span></span>
+                      <span class="font-medium">₹<?= e($it['price'] * $it['quantity']) ?></span>
+                    </div>
+                  <?php endforeach; ?>
+                </div>
               </div>
             <?php endforeach; ?>
           </div>
           <div class="flex justify-between text-sm border-t pt-3"><span class="text-gray-600">Subtotal</span><span>₹<?= e($total) ?></span></div>
+          <div id="discount-row" class="flex justify-between text-sm mt-1 hidden"><span class="text-gray-600">Offer discount</span><span class="text-green-600">− ₹<span id="discount-amt">0</span></span></div>
           <div class="flex justify-between text-sm mt-1"><span class="text-gray-600">Delivery</span><span class="text-green-600">Free</span></div>
-          <div class="flex justify-between font-bold text-lg border-t mt-3 pt-3"><span>Total</span><span class="text-green-600">₹<?= e($total) ?></span></div>
+          <div class="flex justify-between font-bold text-lg border-t mt-3 pt-3"><span>Total payable</span><span class="text-green-600">₹<span id="total-payable"><?= e($total) ?></span></span></div>
           <button class="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg mt-5 font-medium">Place Order</button>
           <p class="text-xs text-gray-400 text-center mt-3">Demo checkout — no real payment is processed.</p>
         </div>
@@ -162,5 +223,31 @@ require __DIR__ . '/partials/head.php';
   }
   document.querySelectorAll('.pay-radio').forEach(function (r) { r.addEventListener('change', syncPayPanels); });
   syncPayPanels();
+
+  // Show the delivery-partner picker only for Home Delivery, and require it then.
+  var partnerPanel  = document.getElementById('partner-panel');
+  var partnerSelect = document.getElementById('partner-select');
+  function syncDelivery() {
+    var sel = document.querySelector('.delivery-radio:checked');
+    var home = sel && sel.getAttribute('data-option') === 'Home Delivery';
+    if (partnerPanel) partnerPanel.classList.toggle('hidden', !home);
+    if (partnerSelect) partnerSelect.required = !!home;
+  }
+  document.querySelectorAll('.delivery-radio').forEach(function (r) { r.addEventListener('change', syncDelivery); });
+  syncDelivery();
+
+  // Live offer discount + total payable.
+  var SUBTOTAL = <?= (int) $total ?>;
+  function syncOffer() {
+    var sel = document.querySelector('.offer-radio:checked');
+    var amt = sel ? parseInt(sel.getAttribute('data-amount') || '0', 10) : 0;
+    if (amt > SUBTOTAL) amt = SUBTOTAL;
+    var row = document.getElementById('discount-row');
+    if (row) row.classList.toggle('hidden', amt <= 0);
+    var a = document.getElementById('discount-amt'); if (a) a.textContent = amt;
+    var t = document.getElementById('total-payable'); if (t) t.textContent = (SUBTOTAL - amt);
+  }
+  document.querySelectorAll('.offer-radio').forEach(function (r) { r.addEventListener('change', syncOffer); });
+  syncOffer();
 </script>
 <?php require __DIR__ . '/partials/foot.php'; ?>

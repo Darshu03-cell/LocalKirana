@@ -5,6 +5,9 @@ $items = cart_items();
 $total = cart_total_price();
 $brand = brand_name();
 $me    = current_user();
+// Group by store — one cart can hold items from several shops.
+$byStore = [];
+foreach ($items as $item) { $byStore[$item['vendor'] ?: 'Local store'][] = $item; }
 $page_title = 'Your Cart · ' . $brand;
 require __DIR__ . '/partials/head.php';
 ?>
@@ -36,23 +39,35 @@ require __DIR__ . '/partials/head.php';
       </div>
     <?php else: ?>
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-        <!-- Items -->
-        <div class="lg:col-span-2 bg-white rounded-2xl border border-gray-200 divide-y">
-          <?php foreach ($items as $item): ?>
-            <div class="flex items-center gap-4 p-4">
-              <img src="<?= e($item['image']) ?>" alt="<?= e($item['name']) ?>" class="w-20 h-20 object-cover rounded-xl border border-gray-100 shrink-0" />
-              <div class="flex-1 min-w-0">
-                <h3 class="font-semibold text-gray-900 truncate"><?= e($item['name']) ?></h3>
-                <p class="text-sm text-gray-500 truncate"><?= e($item['vendor']) ?> · <?= e($item['unit']) ?></p>
-                <p class="text-green-600 font-bold mt-1">₹<?= e($item['price']) ?></p>
+        <!-- Items (grouped by store) -->
+        <div class="lg:col-span-2 space-y-4">
+          <?php if (count($byStore) > 1): ?>
+            <p class="text-sm text-gray-500 inline-flex items-center gap-1.5"><i data-lucide="store" class="w-4 h-4"></i>Your cart has items from <?= count($byStore) ?> stores — they'll be placed as one order.</p>
+          <?php endif; ?>
+          <?php foreach ($byStore as $storeName => $storeItems): ?>
+            <div class="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+              <div class="px-4 py-2.5 bg-gray-50 border-b flex items-center gap-2 text-sm font-semibold text-gray-700">
+                <i data-lucide="store" class="w-4 h-4 text-green-600"></i><?= e($storeName) ?>
               </div>
-              <div class="flex items-center gap-1 bg-gray-50 border border-gray-200 rounded-lg p-1">
-                <a href="cart-action.php?action=decrement&id=<?= e($item['id']) ?>" class="w-8 h-8 flex items-center justify-center rounded-md hover:bg-white text-gray-600" aria-label="Decrease">−</a>
-                <span class="w-8 text-center font-semibold text-sm"><?= e($item['quantity']) ?></span>
-                <a href="cart-action.php?action=increment&id=<?= e($item['id']) ?>" class="w-8 h-8 flex items-center justify-center rounded-md hover:bg-white text-gray-600" aria-label="Increase">+</a>
+              <div class="divide-y">
+                <?php foreach ($storeItems as $item): ?>
+                  <div class="flex items-center gap-4 p-4">
+                    <img src="<?= e($item['image']) ?>" alt="<?= e($item['name']) ?>" class="w-20 h-20 object-cover rounded-xl border border-gray-100 shrink-0" />
+                    <div class="flex-1 min-w-0">
+                      <h3 class="font-semibold text-gray-900 truncate"><?= e($item['name']) ?></h3>
+                      <p class="text-sm text-gray-500 truncate"><?= e($item['unit']) ?></p>
+                      <p class="text-green-600 font-bold mt-1">₹<?= e($item['price']) ?></p>
+                    </div>
+                    <div class="flex items-center gap-1 bg-gray-50 border border-gray-200 rounded-lg p-1">
+                      <a href="cart-action.php?action=decrement&id=<?= e($item['id']) ?>" class="w-8 h-8 flex items-center justify-center rounded-md hover:bg-white text-gray-600" aria-label="Decrease">−</a>
+                      <span class="w-8 text-center font-semibold text-sm"><?= e($item['quantity']) ?></span>
+                      <a href="cart-action.php?action=increment&id=<?= e($item['id']) ?>" class="w-8 h-8 flex items-center justify-center rounded-md hover:bg-white text-gray-600" aria-label="Increase">+</a>
+                    </div>
+                    <div class="w-24 text-right font-bold text-gray-900 hidden sm:block">₹<?= e($item['price'] * $item['quantity']) ?></div>
+                    <a href="cart-action.php?action=remove&id=<?= e($item['id']) ?>" class="text-gray-300 hover:text-red-600 transition-colors" aria-label="Remove"><i data-lucide="trash-2" class="w-5 h-5"></i></a>
+                  </div>
+                <?php endforeach; ?>
               </div>
-              <div class="w-24 text-right font-bold text-gray-900 hidden sm:block">₹<?= e($item['price'] * $item['quantity']) ?></div>
-              <a href="cart-action.php?action=remove&id=<?= e($item['id']) ?>" class="text-gray-300 hover:text-red-600 transition-colors" aria-label="Remove"><i data-lucide="trash-2" class="w-5 h-5"></i></a>
             </div>
           <?php endforeach; ?>
         </div>
@@ -67,7 +82,8 @@ require __DIR__ . '/partials/head.php';
             <span class="font-semibold text-gray-900">Total</span>
             <span class="text-2xl font-bold text-green-600">₹<?= e($total) ?></span>
           </div>
-          <a href="checkout.php" class="mt-5 w-full inline-flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg font-medium">Proceed to Checkout<i data-lucide="arrow-right" class="w-4 h-4"></i></a>
+          <p class="mt-4 text-xs text-gray-500 flex items-center gap-1.5"><i data-lucide="badge-percent" class="w-4 h-4 text-amber-500"></i>Apply offers &amp; choose delivery at checkout.</p>
+          <a href="checkout.php" class="mt-3 w-full inline-flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg font-medium">Proceed to Checkout<i data-lucide="arrow-right" class="w-4 h-4"></i></a>
           <a href="cart-action.php?action=clear" class="mt-3 w-full inline-flex items-center justify-center gap-2 border border-gray-200 text-gray-600 hover:bg-gray-50 py-2.5 rounded-lg text-sm font-medium"><i data-lucide="trash-2" class="w-4 h-4"></i>Clear Cart</a>
         </div>
       </div>

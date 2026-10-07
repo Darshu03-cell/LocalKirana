@@ -35,14 +35,24 @@ function db_init(PDO $pdo): void {
     city TEXT, phone TEXT, rating REAL, distance TEXT, verified INTEGER, image TEXT,
     deliveryTime TEXT, totalProducts INTEGER, totalOrders INTEGER
   )");
+  // Migration: a separate "hygiene certified" flag (admin-verified), shown to customers.
+  try { $pdo->exec("ALTER TABLE vendors ADD COLUMN hygiene_verified INTEGER"); } catch (Throwable $e) {}
   $pdo->exec("CREATE TABLE IF NOT EXISTS products (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, category TEXT, price INTEGER, stock INTEGER,
     image TEXT, vendor TEXT, rating REAL, unit TEXT
   )");
+  // Migrations: richer product details (brand, expiry) + a hygiene/quality flag.
+  foreach (['brand TEXT', 'expiry TEXT', 'hygiene_verified INTEGER'] as $col) {
+    try { $pdo->exec("ALTER TABLE products ADD COLUMN $col"); } catch (Throwable $e) {}
+  }
   $pdo->exec("CREATE TABLE IF NOT EXISTS offers (
     id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, description TEXT, discount TEXT,
     code TEXT, start_date TEXT, end_date TEXT, created_by TEXT, created_at TEXT
   )");
+  // Migrations: structured discounts so offers can actually be applied at checkout.
+  foreach (['discount_type TEXT', 'discount_value INTEGER', 'min_order INTEGER'] as $col) {
+    try { $pdo->exec("ALTER TABLE offers ADD COLUMN $col"); } catch (Throwable $e) {}
+  }
   $pdo->exec("CREATE TABLE IF NOT EXISTS product_catalog (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, category TEXT, image TEXT, unit TEXT
   )");
@@ -55,6 +65,10 @@ function db_init(PDO $pdo): void {
   try { $pdo->exec("ALTER TABLE orders ADD COLUMN customerEmail TEXT"); } catch (Throwable $e) {}
   try { $pdo->exec("ALTER TABLE orders ADD COLUMN paymentStatus TEXT"); } catch (Throwable $e) {}
   try { $pdo->exec("ALTER TABLE orders ADD COLUMN deliveryOption TEXT"); } catch (Throwable $e) {}
+  // Offers applied + delivery-partner assignment captured on the order.
+  foreach (['discount INTEGER', 'offerCode TEXT', 'deliveryPartnerId INTEGER', 'deliveryPartner TEXT'] as $col) {
+    try { $pdo->exec("ALTER TABLE orders ADD COLUMN $col"); } catch (Throwable $e) {}
+  }
   $pdo->exec("CREATE TABLE IF NOT EXISTS suppliers (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, contact TEXT, email TEXT, phone TEXT,
     productsSupplied INTEGER, totalVendors INTEGER, rating REAL, verified INTEGER
@@ -72,6 +86,8 @@ function db_init(PDO $pdo): void {
   $pdo->exec("CREATE TABLE IF NOT EXISTS deliveries (
     id TEXT PRIMARY KEY, customer TEXT, address TEXT, amount INTEGER, distance TEXT, otp TEXT, status TEXT
   )");
+  // Migration: which delivery partner a delivery is assigned to.
+  try { $pdo->exec("ALTER TABLE deliveries ADD COLUMN partnerId INTEGER"); } catch (Throwable $e) {}
   $pdo->exec("CREATE TABLE IF NOT EXISTS completed_deliveries (
     cid INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT, customer TEXT, amount INTEGER, earnings INTEGER, time TEXT
   )");
@@ -86,6 +102,18 @@ function db_init(PDO $pdo): void {
     id INTEGER PRIMARY KEY AUTOINCREMENT, orderId TEXT, customerName TEXT, customerEmail TEXT,
     item TEXT, quantity INTEGER, reason TEXT, status TEXT, date TEXT
   )");
+  // Stores a customer marks as their Regular / Family Store.
+  $pdo->exec("CREATE TABLE IF NOT EXISTS favorite_stores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, customerEmail TEXT, vendorId INTEGER, created_at TEXT
+  )");
+  try { $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_fav_unique ON favorite_stores (customerEmail, vendorId)"); } catch (Throwable $e) {}
+  // In-app notifications. recipient = the person's email; for platform-wide
+  // admin/superadmin alerts recipient is '' and we match on role instead.
+  $pdo->exec("CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, recipient TEXT, title TEXT, body TEXT,
+    link TEXT, is_read INTEGER, created_at TEXT
+  )");
+  try { $pdo->exec("CREATE INDEX IF NOT EXISTS idx_notif_inbox ON notifications (role, recipient, is_read)"); } catch (Throwable $e) {}
 }
 
 /* --------------------------- tiny query helpers --------------------------- */

@@ -5,7 +5,9 @@ require_once __DIR__ . '/includes/dashboard.php';
 $user = require_role('delivery');
 $tab  = $_GET['tab'] ?? 'dashboard';
 
-$activeDeliveries    = deliveries();
+// Resolve this partner's record (linked by login email) and show only their jobs.
+$partner             = delivery_partner_by_email($user['email'] ?? '');
+$activeDeliveries    = $partner ? deliveries_for_partner((int) $partner['id']) : [];
 $completedDeliveries = completed_deliveries();
 $todayEarnings       = array_sum(array_column($completedDeliveries, 'earnings'));
 
@@ -13,13 +15,12 @@ function maps_link(string $address): string {
   return 'https://www.google.com/maps/search/?api=1&query=' . urlencode($address);
 }
 
-$notifList = [];
-if ($activeDeliveries) $notifList[] = [count($activeDeliveries) . ' active deliver' . (count($activeDeliveries) > 1 ? 'ies' : 'y'), 'On your route'];
+$nf = dashboard_notif_shell('delivery', $user['email'] ?? '');
 
 $shell = [
   'panelTitle' => 'Delivery Panel', 'panelSubtitle' => $user['name'], 'baseUrl' => 'delivery.php',
   'activeTab' => $tab, 'headerSubtitle' => 'Manage your deliveries', 'roleLabel' => 'Delivery Partner',
-  'userName' => $user['name'], 'notifList' => $notifList,
+  'userName' => $user['name'], 'notifList' => $nf['list'], 'notifUnread' => $nf['unread'],
   'nav' => [
     ['id' => 'dashboard', 'icon' => 'layout-dashboard', 'label' => 'Dashboard'],
     ['id' => 'active',    'icon' => 'package',          'label' => 'Active Deliveries', 'badge' => $activeDeliveries ? (string) count($activeDeliveries) : null],

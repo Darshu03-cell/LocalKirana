@@ -42,13 +42,12 @@ $showVendorForm = isset($_GET['new']) || $editVendor;
 $statusCounts = [];
 foreach ($orderList as $o) { $statusCounts[$o['status']] = ($statusCounts[$o['status']] ?? 0) + 1; }
 
-$notifList = [];
-if (approvals())       $notifList[] = [count(approvals()) . ' pending approval' . (count(approvals()) > 1 ? 's' : ''), 'Needs review'];
+$nf = dashboard_notif_shell('admin', $user['email'] ?? '');
 
 $shell = [
   'panelTitle' => 'Admin Panel', 'panelSubtitle' => 'System Control', 'baseUrl' => 'admin.php',
   'activeTab' => $tab, 'headerSubtitle' => 'Manage your entire platform', 'roleLabel' => 'Administrator',
-  'userName' => $user['name'], 'notifList' => $notifList,
+  'userName' => $user['name'], 'notifList' => $nf['list'], 'notifUnread' => $nf['unread'],
   'nav' => [
     ['id' => 'dashboard', 'icon' => 'layout-dashboard', 'label' => 'Dashboard'],
     ['id' => 'setup',     'icon' => 'settings',         'label' => 'Shop Setup'],
@@ -156,15 +155,25 @@ render_dashboard_start($shell);
           <div class="bg-white rounded-xl border overflow-hidden">
             <img src="<?= e($v['image']) ?>" alt="<?= e($v['name']) ?>" class="w-full h-40 object-cover" />
             <div class="p-4">
-              <div class="flex items-start justify-between mb-3">
+              <div class="flex items-start justify-between mb-3 gap-2">
                 <div><h3 class="font-bold"><?= e($v['name']) ?></h3><p class="text-sm text-gray-600"><?= e($v['owner']) ?></p></div>
-                <?php if ($v['verified']): ?><span class="text-xs font-medium px-2 py-1 rounded-full bg-green-100 text-green-700">✓ Verified</span><?php endif; ?>
+                <div class="flex flex-col items-end gap-1 shrink-0">
+                  <?php if ($v['verified']): ?><span class="text-xs font-medium px-2 py-1 rounded-full bg-green-100 text-green-700">✓ Verified</span><?php endif; ?>
+                  <?php if (!empty($v['hygiene_verified'])): ?><span class="text-xs font-medium px-2 py-1 rounded-full bg-teal-100 text-teal-700 inline-flex items-center gap-1"><i data-lucide="shield-check" class="w-3 h-3"></i>Hygiene</span><?php endif; ?>
+                </div>
               </div>
               <div class="space-y-2 text-sm">
                 <p class="text-gray-600"><?= e($v['address'] ?: '—') ?></p><p class="text-gray-600"><?= e($v['phone'] ?: '—') ?></p>
                 <?php if (!empty($v['email'])): ?><p class="text-green-700 flex items-center gap-1"><i data-lucide="log-in" class="w-3.5 h-3.5"></i><?= e($v['email']) ?></p><?php endif; ?>
               </div>
-              <div class="flex gap-2 mt-4">
+              <form method="post" action="actions.php" class="mt-3">
+                <input type="hidden" name="do" value="toggle_hygiene" />
+                <input type="hidden" name="type" value="vendor" />
+                <input type="hidden" name="id" value="<?= e($v['id']) ?>" />
+                <input type="hidden" name="redirect" value="admin.php?tab=vendors" />
+                <button class="w-full text-sm rounded-lg px-3 py-1.5 inline-flex items-center justify-center gap-1.5 <?= !empty($v['hygiene_verified']) ? 'bg-teal-50 text-teal-700 border border-teal-200 hover:bg-teal-100' : 'border hover:bg-gray-50 text-gray-700' ?>"><i data-lucide="shield-check" class="w-4 h-4"></i><?= !empty($v['hygiene_verified']) ? 'Remove hygiene certification' : 'Mark Hygiene Certified' ?></button>
+              </form>
+              <div class="flex gap-2 mt-2">
                 <button type="button" data-modal data-modal-title="<?= e($v['name']) ?>" data-modal-target="#<?= $slug ?>" class="flex-1 text-sm border rounded-lg px-3 py-1.5 hover:bg-gray-50">View</button>
                 <a href="admin.php?tab=vendors&edit=<?= e($v['id']) ?>" class="flex-1 text-center text-sm border rounded-lg px-3 py-1.5 hover:bg-gray-50">Edit</a>
                 <form method="post" action="actions.php" data-confirm="Remove &quot;<?= e($v['name']) ?>&quot; and its login?"><input type="hidden" name="do" value="vendor_delete" /><input type="hidden" name="id" value="<?= e($v['id']) ?>" /><button class="text-sm border rounded-lg px-3 py-1.5 hover:bg-red-50 text-red-600 border-red-200">Delete</button></form>
@@ -281,9 +290,12 @@ render_dashboard_start($shell);
             <select name="vendor" class="w-full border rounded-lg px-3 py-2"><?php foreach ($vendorList as $v): ?><option value="<?= e($v['name']) ?>"><?= e($v['name']) ?></option><?php endforeach; ?></select>
           </div>
           <div><label class="block text-sm font-medium mb-1">Category</label><select name="category" class="w-full border rounded-lg px-3 py-2"><?php foreach ($CATS as $c): ?><option><?= e($c) ?></option><?php endforeach; ?></select></div>
-          <div><label class="block text-sm font-medium mb-1">Unit</label><input name="unit" value="1kg" class="w-full border rounded-lg px-3 py-2" /></div>
+          <div><label class="block text-sm font-medium mb-1">Unit / Quantity</label><input name="unit" value="1kg" class="w-full border rounded-lg px-3 py-2" /></div>
+          <div><label class="block text-sm font-medium mb-1">Brand Name <span class="text-xs text-gray-400">(optional)</span></label><input name="brand" placeholder="e.g. Aashirvaad" class="w-full border rounded-lg px-3 py-2" /></div>
+          <div><label class="block text-sm font-medium mb-1">Expiry / Best Before <span class="text-xs text-gray-400">(optional)</span></label><input name="expiry" placeholder="e.g. Dec 2026" class="w-full border rounded-lg px-3 py-2" /></div>
           <div><label class="block text-sm font-medium mb-1">Price (₹)</label><input name="price" type="number" min="0" required class="w-full border rounded-lg px-3 py-2" /></div>
           <div><label class="block text-sm font-medium mb-1">Stock</label><input name="stock" type="number" min="0" required class="w-full border rounded-lg px-3 py-2" /></div>
+          <label class="md:col-span-2 flex items-center gap-2 bg-teal-50 border border-teal-100 rounded-lg px-3 py-2.5 cursor-pointer"><input type="checkbox" name="hygiene_verified" value="1" class="accent-teal-600 w-4 h-4" /><span class="text-sm text-gray-700 flex items-center gap-1.5"><i data-lucide="shield-check" class="w-4 h-4 text-teal-600"></i>Hygiene / quality checked</span></label>
           <div class="md:col-span-2"><button class="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-lg">Add Product</button></div>
         </form>
       <?php else: ?>
@@ -302,19 +314,21 @@ render_dashboard_start($shell);
         <input type="hidden" name="do" value="offer_add" />
         <input type="hidden" name="redirect" value="admin.php?tab=offers" />
         <div><label class="block text-sm font-medium mb-1">Offer Title</label><input name="title" required placeholder="Weekend Grocery Sale" class="w-full border rounded-lg px-3 py-2" /></div>
-        <div><label class="block text-sm font-medium mb-1">Discount</label><input name="discount" required placeholder="20% OFF" class="w-full border rounded-lg px-3 py-2" /></div>
+        <div><label class="block text-sm font-medium mb-1">Discount Type</label><select name="discount_type" class="w-full border rounded-lg px-3 py-2"><option value="percent">Percentage (%)</option><option value="flat">Flat amount (₹)</option></select></div>
+        <div><label class="block text-sm font-medium mb-1">Discount Value</label><input name="discount_value" type="number" min="1" required placeholder="e.g. 20" class="w-full border rounded-lg px-3 py-2" /></div>
+        <div><label class="block text-sm font-medium mb-1">Minimum Order (₹) <span class="text-xs text-gray-400">(optional)</span></label><input name="min_order" type="number" min="0" value="0" class="w-full border rounded-lg px-3 py-2" /></div>
         <div><label class="block text-sm font-medium mb-1">Coupon Code <span class="text-xs text-gray-400">(optional)</span></label><input name="code" placeholder="WEEKEND20" class="w-full border rounded-lg px-3 py-2" /></div>
         <div><label class="block text-sm font-medium mb-1">Description</label><input name="description" placeholder="Save on everyday essentials" class="w-full border rounded-lg px-3 py-2" /></div>
         <div><label class="block text-sm font-medium mb-1">Starts</label><input name="start_date" type="date" required value="<?= date('Y-m-d') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
         <div><label class="block text-sm font-medium mb-1">Ends</label><input name="end_date" type="date" required value="<?= date('Y-m-d', strtotime('+30 days')) ?>" class="w-full border rounded-lg px-3 py-2" /></div>
-        <div class="md:col-span-2"><button class="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-lg">Publish Offer</button></div>
+        <div class="md:col-span-2"><p class="text-xs text-gray-500 mb-3">Customers who meet the minimum order will be able to pick this offer at checkout; the discount is applied automatically.</p><button class="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-lg">Publish Offer</button></div>
       </form>
     </div>
     <div class="bg-white rounded-xl border p-6">
       <h3 class="font-bold text-lg mb-4">Published Offers</h3>
       <?php if ($offerList): ?>
         <div class="divide-y">
-          <?php foreach ($offerList as $offer): ?><div class="py-3 flex items-center justify-between gap-4"><div><p class="font-medium"><?= e($offer['title']) ?> <span class="text-green-700 ml-2"><?= e($offer['discount']) ?></span></p><p class="text-sm text-gray-500"><?= e($offer['description']) ?></p></div><span class="text-xs text-gray-500 whitespace-nowrap"><?= e($offer['start_date']) ?> to <?= e($offer['end_date']) ?></span></div><?php endforeach; ?>
+          <?php foreach ($offerList as $offer): ?><div class="py-3 flex items-center justify-between gap-4"><div><p class="font-medium"><?= e($offer['title']) ?> <span class="text-green-700 ml-2"><?= e($offer['discount'] ?: offer_discount_text($offer['discount_type'] ?? 'percent', (int) ($offer['discount_value'] ?? 0))) ?></span><?php if (!empty($offer['code'])): ?> <span class="text-xs font-mono bg-gray-100 rounded px-1.5 py-0.5 ml-1"><?= e($offer['code']) ?></span><?php endif; ?></p><p class="text-sm text-gray-500"><?= e($offer['description']) ?><?php if ((int) ($offer['min_order'] ?? 0) > 0): ?> · min order ₹<?= (int) $offer['min_order'] ?><?php endif; ?></p></div><span class="text-xs text-gray-500 whitespace-nowrap"><?= e($offer['start_date']) ?> to <?= e($offer['end_date']) ?></span></div><?php endforeach; ?>
         </div>
       <?php else: ?><p class="text-sm text-gray-500">No offers published yet.</p><?php endif; ?>
     </div>

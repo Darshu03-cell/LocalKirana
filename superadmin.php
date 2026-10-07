@@ -97,8 +97,15 @@ function so_order_detail_html(array $o, string $qs): string {
         <?php endforeach; else: ?>
           <div class="px-3 py-2 text-gray-400"><?= (int) $o['items'] ?> item(s) — not itemised</div>
         <?php endif; ?>
+        <?php if ((int) ($o['discount'] ?? 0) > 0): ?>
+          <div class="flex justify-between px-3 py-2 text-gray-500"><span>Subtotal</span><span>₹<?= (int) $o['total'] + (int) $o['discount'] ?></span></div>
+          <div class="flex justify-between px-3 py-2 text-green-600"><span>Offer<?= !empty($o['offerCode']) ? ' (' . e($o['offerCode']) . ')' : '' ?></span><span>− ₹<?= (int) $o['discount'] ?></span></div>
+        <?php endif; ?>
         <div class="flex justify-between px-3 py-2 bg-gray-50 font-bold"><span>Total</span><span>₹<?= e($o['total']) ?></span></div>
       </div>
+      <?php if (!empty($o['deliveryOption'])): ?>
+        <p class="text-xs text-gray-600 mt-2 flex items-center gap-1.5"><i data-lucide="truck" class="w-3.5 h-3.5"></i><?= e($o['deliveryOption']) ?><?= !empty($o['deliveryPartner']) ? ' · Partner: ' . e($o['deliveryPartner']) : '' ?></p>
+      <?php endif; ?>
     </div>
 
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -148,14 +155,12 @@ function so_order_detail_html(array $o, string $qs): string {
   <?php return ob_get_clean();
 }
 
-$notifList = [];
-if ($unpaidCount) $notifList[] = [$unpaidCount . ' payment' . ($unpaidCount > 1 ? 's' : '') . ' pending', 'Cash on delivery to collect'];
-if ($pendingReturns) $notifList[] = [$pendingReturns . ' return' . ($pendingReturns > 1 ? 's' : '') . ' to review', 'Customers requested returns'];
+$nf = dashboard_notif_shell('superadmin', $user['email'] ?? '');
 
 $shell = [
   'panelTitle' => 'Super Admin', 'panelSubtitle' => $user['name'], 'baseUrl' => 'superadmin.php',
   'activeTab' => $tab, 'headerSubtitle' => 'Orders, payments & customers oversight', 'roleLabel' => 'Super Admin',
-  'userName' => $user['name'], 'notifList' => $notifList,
+  'userName' => $user['name'], 'notifList' => $nf['list'], 'notifUnread' => $nf['unread'],
   'nav' => [
     ['id' => 'dashboard', 'icon' => 'layout-dashboard', 'label' => 'Overview'],
     ['id' => 'orders',    'icon' => 'shopping-cart',    'label' => 'All Orders', 'badge' => $counts['Pending'] ? (string) $counts['Pending'] : null],
@@ -264,19 +269,21 @@ render_dashboard_start($shell);
         <input type="hidden" name="do" value="offer_add" />
         <input type="hidden" name="redirect" value="superadmin.php?tab=offers" />
         <div><label class="block text-sm font-medium mb-1">Offer Title</label><input name="title" required placeholder="Weekend Grocery Sale" class="w-full border rounded-lg px-3 py-2" /></div>
-        <div><label class="block text-sm font-medium mb-1">Discount</label><input name="discount" required placeholder="20% OFF" class="w-full border rounded-lg px-3 py-2" /></div>
+        <div><label class="block text-sm font-medium mb-1">Discount Type</label><select name="discount_type" class="w-full border rounded-lg px-3 py-2"><option value="percent">Percentage (%)</option><option value="flat">Flat amount (₹)</option></select></div>
+        <div><label class="block text-sm font-medium mb-1">Discount Value</label><input name="discount_value" type="number" min="1" required placeholder="e.g. 20" class="w-full border rounded-lg px-3 py-2" /></div>
+        <div><label class="block text-sm font-medium mb-1">Minimum Order (₹) <span class="text-xs text-gray-400">(optional)</span></label><input name="min_order" type="number" min="0" value="0" class="w-full border rounded-lg px-3 py-2" /></div>
         <div><label class="block text-sm font-medium mb-1">Coupon Code <span class="text-xs text-gray-400">(optional)</span></label><input name="code" placeholder="WEEKEND20" class="w-full border rounded-lg px-3 py-2" /></div>
         <div><label class="block text-sm font-medium mb-1">Description</label><input name="description" placeholder="Save on everyday essentials" class="w-full border rounded-lg px-3 py-2" /></div>
         <div><label class="block text-sm font-medium mb-1">Starts</label><input name="start_date" type="date" required value="<?= date('Y-m-d') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
         <div><label class="block text-sm font-medium mb-1">Ends</label><input name="end_date" type="date" required value="<?= date('Y-m-d', strtotime('+30 days')) ?>" class="w-full border rounded-lg px-3 py-2" /></div>
-        <div class="md:col-span-2"><button class="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-lg">Publish Offer</button></div>
+        <div class="md:col-span-2"><p class="text-xs text-gray-500 mb-3">Customers who meet the minimum order will be able to pick this offer at checkout; the discount is applied automatically.</p><button class="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-lg">Publish Offer</button></div>
       </form>
     </div>
     <div class="bg-white rounded-xl border p-6">
       <h3 class="font-bold text-lg mb-4">Published Offers</h3>
       <?php if ($offerList): ?>
         <div class="divide-y">
-          <?php foreach ($offerList as $offer): ?><div class="py-3 flex items-center justify-between gap-4"><div><p class="font-medium"><?= e($offer['title']) ?> <span class="text-green-700 ml-2"><?= e($offer['discount']) ?></span></p><p class="text-sm text-gray-500"><?= e($offer['description']) ?></p></div><span class="text-xs text-gray-500 whitespace-nowrap"><?= e($offer['start_date']) ?> to <?= e($offer['end_date']) ?></span></div><?php endforeach; ?>
+          <?php foreach ($offerList as $offer): ?><div class="py-3 flex items-center justify-between gap-4"><div><p class="font-medium"><?= e($offer['title']) ?> <span class="text-green-700 ml-2"><?= e($offer['discount'] ?: offer_discount_text($offer['discount_type'] ?? 'percent', (int) ($offer['discount_value'] ?? 0))) ?></span><?php if (!empty($offer['code'])): ?> <span class="text-xs font-mono bg-gray-100 rounded px-1.5 py-0.5 ml-1"><?= e($offer['code']) ?></span><?php endif; ?></p><p class="text-sm text-gray-500"><?= e($offer['description']) ?><?php if ((int) ($offer['min_order'] ?? 0) > 0): ?> · min order ₹<?= (int) $offer['min_order'] ?><?php endif; ?></p></div><span class="text-xs text-gray-500 whitespace-nowrap"><?= e($offer['start_date']) ?> to <?= e($offer['end_date']) ?></span></div><?php endforeach; ?>
         </div>
       <?php else: ?><p class="text-sm text-gray-500">No offers published yet.</p><?php endif; ?>
     </div>

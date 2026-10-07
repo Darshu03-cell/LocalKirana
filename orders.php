@@ -3,6 +3,8 @@ require_once __DIR__ . '/includes/init.php';
 
 $user = require_role('customer');
 $myOrders = customer_orders($user['email'] ?? '');
+$myNotifs = notifications_for('customer', $user['email'] ?? '', 15);
+$unreadNotifs = notifications_unread_count('customer', $user['email'] ?? '');
 
 $STEPS = ['Pending', 'Processing', 'In Transit', 'Delivered'];
 function step_index(string $status): int {
@@ -45,6 +47,29 @@ require __DIR__ . '/partials/head.php';
       <a href="index.php#products" class="text-sm border rounded-lg px-4 py-2 hover:bg-gray-50">← Continue shopping</a>
     </div>
 
+    <?php if ($myNotifs): ?>
+      <div class="bg-white rounded-xl border mb-8 overflow-hidden">
+        <div class="flex items-center justify-between px-5 py-3 border-b bg-gray-50">
+          <h3 class="font-semibold flex items-center gap-2"><i data-lucide="bell" class="w-4 h-4 text-green-600"></i>Notifications <?php if ($unreadNotifs): ?><span class="text-xs font-medium text-white bg-red-500 rounded-full px-2 py-0.5"><?= $unreadNotifs ?> new</span><?php endif; ?></h3>
+          <?php if ($unreadNotifs): ?>
+            <form method="post" action="actions.php">
+              <input type="hidden" name="do" value="notifications_read" />
+              <input type="hidden" name="redirect" value="orders.php" />
+              <button class="text-xs font-medium text-green-700 hover:underline">Mark all as read</button>
+            </form>
+          <?php endif; ?>
+        </div>
+        <ul class="divide-y max-h-72 overflow-auto">
+          <?php foreach ($myNotifs as $n): $u = empty($n['is_read']); ?>
+            <li class="px-5 py-3 <?= $u ? 'bg-green-50/60' : '' ?>">
+              <p class="text-sm font-medium flex items-center gap-2"><?php if ($u): ?><span class="w-1.5 h-1.5 rounded-full bg-green-600 shrink-0"></span><?php endif; ?><?= e($n['title']) ?></p>
+              <?php if (!empty($n['body'])): ?><p class="text-xs text-gray-500 mt-0.5"><?= e($n['body']) ?></p><?php endif; ?>
+            </li>
+          <?php endforeach; ?>
+        </ul>
+      </div>
+    <?php endif; ?>
+
     <?php if (!$myOrders): ?>
       <div class="bg-white rounded-xl border p-12 text-center">
         <i data-lucide="package" class="w-16 h-16 text-gray-300 mx-auto mb-4"></i>
@@ -66,6 +91,8 @@ require __DIR__ . '/partials/head.php';
               <div class="text-right">
                 <p class="text-2xl font-bold text-green-600">₹<?= e($o['total']) ?></p>
                 <p class="text-xs text-gray-500"><?= e($o['items']) ?> item<?= (int)$o['items'] === 1 ? '' : 's' ?> · <?= e($o['paymentMethod']) ?></p>
+                <?php if ((int) ($o['discount'] ?? 0) > 0): ?><p class="text-xs font-medium text-green-600 mt-0.5">You saved ₹<?= (int) $o['discount'] ?><?= !empty($o['offerCode']) ? ' · ' . e($o['offerCode']) : '' ?></p><?php endif; ?>
+                <?php if (!empty($o['deliveryOption'])): ?><p class="text-xs text-gray-500 mt-0.5 inline-flex items-center gap-1"><i data-lucide="<?= $o['deliveryOption'] === 'Home Delivery' ? 'truck' : 'shopping-bag' ?>" class="w-3.5 h-3.5"></i><?= e($o['deliveryOption']) ?><?= !empty($o['deliveryPartner']) ? ' · ' . e($o['deliveryPartner']) : '' ?></p><?php endif; ?>
               </div>
             </div>
 
