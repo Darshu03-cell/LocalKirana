@@ -37,6 +37,9 @@ foreach ($allOrders as $o) {
 }
 $unpaidCount = count(array_filter($allOrders, fn($o) => $o['status'] !== 'Cancelled' && order_payment_status($o) === 'Unpaid'));
 
+// Platform accounting: the shared money model summed over all live orders.
+$platformAcct = orders_economics($allOrders);
+
 $customers = array_values(array_filter(accounts_all(), fn($a) => ($a['role'] ?? '') === 'customer'));
 $orderCountByEmail = [];
 foreach ($allOrders as $o) { $e = strtolower($o['customerEmail'] ?? ''); if ($e) $orderCountByEmail[$e] = ($orderCountByEmail[$e] ?? 0) + 1; }
@@ -106,6 +109,17 @@ function so_order_detail_html(array $o, string $qs): string {
       <?php if (!empty($o['deliveryOption'])): ?>
         <p class="text-xs text-gray-600 mt-2 flex items-center gap-1.5"><i data-lucide="truck" class="w-3.5 h-3.5"></i><?= e($o['deliveryOption']) ?><?= !empty($o['deliveryPartner']) ? ' · Partner: ' . e($o['deliveryPartner']) : '' ?></p>
       <?php endif; ?>
+    </div>
+
+    <?php $eco = order_economics((int) $o['total']); ?>
+    <div>
+      <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Transaction breakdown</p>
+      <div class="border rounded-lg divide-y">
+        <div class="flex justify-between px-3 py-2"><span class="text-gray-600">Order value</span><span class="font-medium">₹<?= number_format($eco['total']) ?></span></div>
+        <div class="flex justify-between px-3 py-2"><span class="text-gray-600">Store receives <span class="text-xs text-gray-400">(after <?= (int) round(PLATFORM_COMMISSION_RATE * 100) ?>% commission)</span></span><span class="text-blue-600">₹<?= number_format($eco['vendorNet']) ?></span></div>
+        <div class="flex justify-between px-3 py-2"><span class="text-gray-600">Delivery partner <span class="text-xs text-gray-400">(<?= (int) round(DELIVERY_PARTNER_RATE * 100) ?>%)</span></span><span class="text-amber-600">₹<?= number_format($eco['deliveryPay']) ?></span></div>
+        <div class="flex justify-between px-3 py-2 bg-green-50 font-bold text-green-700"><span>Platform net</span><span>₹<?= number_format($eco['platformNet']) ?></span></div>
+      </div>
     </div>
 
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -210,6 +224,32 @@ render_dashboard_start($shell);
           <p class="text-2xl font-bold"><?= $c ?></p><p class="text-xs text-gray-500 mt-1"><?= e($st) ?></p>
         </a>
       <?php endforeach; ?>
+    </div>
+
+    <div class="bg-white rounded-xl border p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="font-bold text-lg flex items-center gap-2"><i data-lucide="wallet" class="w-5 h-5 text-green-600"></i>Platform Accounts</h3>
+        <span class="text-xs text-gray-400">excludes cancelled orders</span>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div class="p-4 bg-gray-50 rounded-lg">
+          <p class="text-sm text-gray-500">Gross order value</p>
+          <p class="text-2xl font-bold text-gray-900 mt-1">₹<?= number_format($platformAcct['total']) ?></p>
+        </div>
+        <div class="p-4 bg-blue-50 rounded-lg">
+          <p class="text-sm text-gray-500">Paid to stores</p>
+          <p class="text-2xl font-bold text-blue-600 mt-1">₹<?= number_format($platformAcct['vendorNet']) ?></p>
+        </div>
+        <div class="p-4 bg-amber-50 rounded-lg">
+          <p class="text-sm text-gray-500">Delivery paid out <span class="text-xs">(<?= (int) round(DELIVERY_PARTNER_RATE * 100) ?>%)</span></p>
+          <p class="text-2xl font-bold text-amber-600 mt-1">₹<?= number_format($platformAcct['deliveryPay']) ?></p>
+        </div>
+        <div class="p-4 bg-green-50 rounded-lg ring-1 ring-green-100">
+          <p class="text-sm text-gray-500">Platform net</p>
+          <p class="text-2xl font-bold text-green-600 mt-1">₹<?= number_format($platformAcct['platformNet']) ?></p>
+          <p class="text-xs text-gray-400 mt-1"><?= (int) round(PLATFORM_COMMISSION_RATE * 100) ?>% commission − delivery</p>
+        </div>
+      </div>
     </div>
   </div>
 

@@ -14,6 +14,8 @@ $vendorOrders   = vendor_orders($shopName);
 $revenue     = array_sum(array_column($vendorOrders, 'total'));
 $pendingCnt  = count(array_filter($vendorOrders, fn($o) => $o['status'] === 'Pending'));
 $lowStock    = array_values(array_filter($vendorProducts, fn($p) => $p['stock'] < 20));
+// Accounting: gross sales → platform commission → your net payout (shared money model).
+$acct        = orders_economics($vendorOrders);
 
 // Products tab filters
 $q      = trim($_GET['q'] ?? '');
@@ -66,6 +68,36 @@ render_dashboard_start($shell);
 
 <?php if ($tab === 'dashboard'): ?>
   <div class="space-y-6">
+    <?php if ($lowStock): ?>
+      <div class="bg-orange-50 border border-orange-200 rounded-xl p-5">
+        <div class="flex items-start gap-3 mb-3">
+          <span class="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-orange-100 text-orange-600 shrink-0"><i data-lucide="triangle-alert" class="w-5 h-5"></i></span>
+          <div>
+            <h3 class="font-bold text-orange-900">Low stock — <?= count($lowStock) ?> item<?= count($lowStock) > 1 ? 's' : '' ?> need attention</h3>
+            <p class="text-sm text-orange-700/90">Items below 20 units. Request a restock from your suppliers, or update the stock yourself.</p>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <?php foreach ($lowStock as $p): $out = (int) $p['stock'] === 0; ?>
+            <div class="flex items-center justify-between gap-3 bg-white border border-orange-100 rounded-lg px-3 py-2">
+              <div class="min-w-0">
+                <p class="font-medium truncate"><?= e($p['name']) ?></p>
+                <p class="text-xs <?= $out ? 'text-red-600 font-semibold' : 'text-orange-600' ?>"><?= $out ? 'Out of stock' : e($p['stock']) . ' units left' ?></p>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <form method="post" action="actions.php">
+                  <input type="hidden" name="do" value="restock_request" />
+                  <input type="hidden" name="id" value="<?= e($p['id']) ?>" />
+                  <button class="text-xs bg-orange-600 hover:bg-orange-700 text-white rounded-lg px-2.5 py-1.5 flex items-center gap-1"><i data-lucide="truck" class="w-3.5 h-3.5"></i>Request Restock</button>
+                </form>
+                <a href="vendor.php?tab=products&edit=<?= e($p['id']) ?>" class="text-xs border border-orange-200 text-orange-700 rounded-lg px-2.5 py-1.5 hover:bg-orange-100">Update</a>
+              </div>
+            </div>
+          <?php endforeach; ?>
+        </div>
+      </div>
+    <?php endif; ?>
+
     <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
       <?php
       stat_card('₹' . number_format($revenue), 'Total Sales', 'indian-rupee', 'bg-green-100', 'text-green-600');
@@ -73,6 +105,27 @@ render_dashboard_start($shell);
       stat_card((string) count($vendorProducts), 'Products', 'package', 'bg-purple-100', 'text-purple-600');
       stat_card((string) count($lowStock), 'Low Stock Items', 'triangle-alert', 'bg-orange-100', 'text-orange-600');
       ?>
+    </div>
+
+    <div class="bg-white rounded-xl border p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="font-bold text-lg flex items-center gap-2"><i data-lucide="wallet" class="w-5 h-5 text-green-600"></i>Your Accounts</h3>
+        <span class="text-xs text-gray-400">excludes cancelled orders</span>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="p-4 bg-gray-50 rounded-lg">
+          <p class="text-sm text-gray-500">Gross sales</p>
+          <p class="text-2xl font-bold text-gray-900 mt-1">₹<?= number_format($acct['total']) ?></p>
+        </div>
+        <div class="p-4 bg-amber-50 rounded-lg">
+          <p class="text-sm text-gray-500">Platform commission <span class="text-xs">(<?= (int) round(PLATFORM_COMMISSION_RATE * 100) ?>%)</span></p>
+          <p class="text-2xl font-bold text-amber-600 mt-1">− ₹<?= number_format($acct['commission']) ?></p>
+        </div>
+        <div class="p-4 bg-green-50 rounded-lg ring-1 ring-green-100">
+          <p class="text-sm text-gray-500">Your net payout</p>
+          <p class="text-2xl font-bold text-green-600 mt-1">₹<?= number_format($acct['vendorNet']) ?></p>
+        </div>
+      </div>
     </div>
 
     <div class="bg-white rounded-xl border p-6">

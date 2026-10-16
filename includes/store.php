@@ -164,6 +164,36 @@ function delivery_partner_by_email(string $email): ?array {
 function completed_deliveries(): array { return db_all("SELECT id, customer, amount, earnings, time FROM completed_deliveries ORDER BY cid"); }
 function approvals(): array            { return db_all("SELECT * FROM approvals ORDER BY id"); }
 
+/* ------------------------------- economics -------------------------------- */
+// One shared money model, used by the accounting views and the per-order
+// breakdown so every screen shows the same numbers. The rates are the business
+// model: what the platform keeps and what the delivery partner is paid.
+const PLATFORM_COMMISSION_RATE = 0.10; // platform's cut of each order, taken from the store's share
+const DELIVERY_PARTNER_RATE    = 0.08; // paid to the delivery partner, as a share of the order value
+
+/** Split one order's value into who-gets-what (whole rupees). */
+function order_economics(int $total): array {
+  $commission  = (int) round($total * PLATFORM_COMMISSION_RATE);
+  $deliveryPay = (int) round($total * DELIVERY_PARTNER_RATE);
+  return [
+    'total'       => $total,
+    'commission'  => $commission,   // platform commission
+    'deliveryPay' => $deliveryPay,  // delivery-partner payout
+    'vendorNet'   => $total - $commission,
+    'platformNet' => $commission - $deliveryPay,
+  ];
+}
+
+/** Add up the money model across many orders (for the accounting summary). */
+function orders_economics(array $orders): array {
+  $sum = ['total' => 0, 'commission' => 0, 'deliveryPay' => 0, 'vendorNet' => 0, 'platformNet' => 0];
+  foreach ($orders as $o) {
+    if (($o['status'] ?? '') === 'Cancelled') continue;
+    foreach (order_economics((int) ($o['total'] ?? 0)) as $k => $v) $sum[$k] += $v;
+  }
+  return $sum;
+}
+
 /** Look up a record (from an already-fetched array) by id. */
 function find_by_id(array $rows, $id): ?array {
   foreach ($rows as $r) { if ((string) ($r['id'] ?? '') === (string) $id) return $r; }
@@ -679,6 +709,16 @@ function vendor_settings_update(string $email, string $name, string $phone, stri
 
 /* --------------------------- supplier operations --------------------------- */
 
+/** A vendor asks a supplier to restock a product. Shows up on the supplier's
+ *  dashboard as a Pending request they can approve or reject. */
+function supplier_request_add(string $vendor, string $product, int $quantity, int $amount): void {
+  db_exec("INSERT INTO supplier_requests (vendor, product, quantity, amount, status)
+           VALUES (:v, :p, :q, :a, 'Pending')",
+          [':v' => $vendor, ':p' => $product, ':q' => $quantity, ':a' => $amount]);
+  notify('supplier', '', 'New restock request',
+         "$vendor requested $quantity units of $product.", 'supplier.php?tab=orders');
+}
+
 function supplier_request_set_status(int $id, string $status): void {
   db_exec("UPDATE supplier_requests SET status = :s WHERE id = :id", [':s' => $status, ':id' => $id]);
 }
@@ -731,7 +771,7 @@ function delivery_advance(string $id): void {
     db_exec("INSERT INTO completed_deliveries (id, customer, amount, earnings, time)
              VALUES (:id, :c, :a, :e, :t)", [
       ':id' => $d['id'], ':c' => $d['customer'], ':a' => (int) $d['amount'],
-      ':e'  => (int) round(((int) $d['amount']) * 0.08), ':t' => date('h:i A'),
+      ':e'  => (int) round(((int) $d['amount']) * DELIVERY_PARTNER_RATE), ':t' => date('h:i A'),
     ]);
     db_exec("DELETE FROM deliveries WHERE id = :id", [':id' => $id]);
     // Mark the order delivered and tell the customer (also notifies via order_set_status).

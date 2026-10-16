@@ -177,6 +177,20 @@ switch ($do) {
     header('Location: ' . safe_redirect('vendor.php?tab=products'));
     exit;
 
+  case 'restock_request':
+    if (!$user || ($user['role'] ?? '') !== 'vendor') { header('Location: login.php'); exit; }
+    $shop    = $user['shopName'] ?? '';
+    $product = find_by_id(products(), (int) ($_POST['id'] ?? 0));
+    if ($product && ($product['vendor'] ?? '') === $shop) {
+      $qty = 50; // one restock batch
+      supplier_request_add($shop, $product['name'], $qty, (int) $product['price'] * $qty);
+      set_flash('Restock request for "' . $product['name'] . '" sent to suppliers.');
+    } else {
+      set_flash('Could not send restock request.', 'error');
+    }
+    header('Location: ' . safe_redirect('vendor.php?tab=dashboard'));
+    exit;
+
   case 'order_status':
     order_set_status($_POST['id'], $_POST['status']);
     set_flash('Order ' . $_POST['id'] . ' marked ' . $_POST['status'] . '.');
