@@ -14,10 +14,21 @@ name: Deploy to Hostinger (FTP)
 #   The secret key is written to includes/config.local.php on deploy and uploaded to
 #   the server, but is NEVER committed to git (so it stays out of the public repo).
 #
-# NOTE ON server-dir below:
-#   kirana.meriise.org is served from  public_html/kirana . The FTP account opens
-#   INSIDE public_html, so we upload into  ./kirana/ . (Both ./ and
-#   ./public_html/kirana/ were tried and did not reach the live folder.)
+# KNOWN ISSUE (diagnosed 2026-10-16): the FTP account these secrets point to is
+#   NOT the location that serves kirana.meriise.org. A probe uploaded marker files
+#   (via this same working action) into ./ , public_html/ , public_html/kirana/ ,
+#   kirana/ , and domains/kirana.meriise.org/public_html/ — ALL uploads succeeded,
+#   but NONE became visible at kirana.meriise.org or meriise.org. Meanwhile the
+#   live site's existing files (index.php, login.php, …) are served fine. So no
+#   server-dir value can fix this: the FTP credentials themselves reach the wrong
+#   account/filesystem. The live site is being updated by other means (manual
+#   File Manager upload to the correct account).
+#
+#   TO FIX auto-deploy: in Hostinger hPanel → Files → FTP Accounts, find (or create)
+#   the FTP account whose directory IS the kirana.meriise.org document root (the
+#   folder that already contains index.php), and set FTP_SERVER / FTP_USERNAME /
+#   FTP_PASSWORD to THAT account. A domain-scoped FTP account opens directly in its
+#   docroot, so server-dir: ./ is then correct.
 
 on:
   push:
@@ -48,61 +59,6 @@ jobs:
             echo "  'razorpay_key_secret' => '${RZP_SECRET}',"
             echo '];'
           } > includes/config.local.php
-
-      # TEMP DIAGNOSTIC: use the (known-working) FTP action to drop a uniquely-named
-      # marker into each candidate folder. Whichever marker appears at the live URL
-      # reveals the true document root. Removed once server-dir is corrected.
-      - name: Build probe markers
-        run: |
-          for d in pa pb pc pd; do mkdir -p "probe/$d"; done
-          echo phk > probe/pa/probe_phk.txt
-          echo dom > probe/pb/probe_dom.txt
-          echo ph  > probe/pc/probe_ph.txt
-          echo k   > probe/pd/probe_k.txt
-
-      - name: Probe public_html/kirana
-        continue-on-error: true
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          local-dir: ./probe/pa/
-          server-dir: ./public_html/kirana/
-          state-name: .probe-pa.json
-
-      - name: Probe domains/kirana.meriise.org/public_html
-        continue-on-error: true
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          local-dir: ./probe/pb/
-          server-dir: ./domains/kirana.meriise.org/public_html/
-          state-name: .probe-pb.json
-
-      - name: Probe public_html
-        continue-on-error: true
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          local-dir: ./probe/pc/
-          server-dir: ./public_html/
-          state-name: .probe-pc.json
-
-      - name: Probe kirana
-        continue-on-error: true
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          local-dir: ./probe/pd/
-          server-dir: ./kirana/
-          state-name: .probe-pd.json
 
       - name: Upload files to Hostinger via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
