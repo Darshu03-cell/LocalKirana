@@ -9,6 +9,7 @@ $vendorList   = vendors_list();
 $supplierList = suppliers_list();
 $partnerList  = delivery_partners();
 $orderList    = orders();
+$paymentList  = payments_all();
 $accountList  = accounts_all();
 $settings     = shop_settings();
 $CATS         = category_names();
@@ -52,6 +53,7 @@ $shell = [
     ['id' => 'dashboard', 'icon' => 'layout-dashboard', 'label' => 'Dashboard'],
     ['id' => 'setup',     'icon' => 'settings',         'label' => 'Shop Setup'],
     ['id' => 'offers',    'icon' => 'badge-percent',     'label' => 'Offers', 'badge' => $offerList ? (string) count($offerList) : null],
+    ['id' => 'payments',  'icon' => 'receipt',          'label' => 'Payments', 'badge' => $paymentList ? (string) count($paymentList) : null],
     ['id' => 'vendors',   'icon' => 'store',            'label' => 'Vendors', 'badge' => count($vendorList) ? (string) count($vendorList) : null],
     ['id' => 'suppliers', 'icon' => 'package',          'label' => 'Suppliers'],
     ['id' => 'delivery',  'icon' => 'truck',            'label' => 'Delivery Partners'],
@@ -381,6 +383,46 @@ render_dashboard_start($shell);
           </tbody>
         </table>
       <?php else: empty_state($accountList ? 'No ' . $uroleFilter . ' accounts.' : 'No one has signed up yet.', 'key-round'); endif; ?>
+    </div>
+  </div>
+
+<?php elseif ($tab === 'payments'): ?>
+  <?php
+    $collected  = array_sum(array_map(fn($p) => ($p['status'] ?? '') === 'Paid' ? (int) $p['amount'] : 0, $paymentList));
+    $pendingPay = array_sum(array_map(fn($p) => ($p['status'] ?? '') !== 'Paid' ? (int) $p['amount'] : 0, $paymentList));
+    $commTotal  = array_sum(array_map(fn($p) => (int) ($p['commission'] ?? 0), $paymentList));
+  ?>
+  <div class="space-y-6">
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+      <?php
+      stat_card('₹' . number_format($collected), 'Collected', 'wallet', 'bg-green-100', 'text-green-600');
+      stat_card('₹' . number_format($pendingPay), 'Pending (COD)', 'clock', 'bg-amber-100', 'text-amber-600');
+      stat_card('₹' . number_format($commTotal), 'Platform Commission', 'percent', 'bg-purple-100', 'text-purple-600');
+      stat_card((string) count($paymentList), 'Transactions', 'receipt', 'bg-blue-100', 'text-blue-600');
+      ?>
+    </div>
+    <div class="bg-white rounded-xl border p-6 overflow-x-auto">
+      <h3 class="font-bold text-lg mb-4">Payment History</h3>
+      <?php if ($paymentList): ?>
+        <table class="w-full text-sm">
+          <thead><tr class="text-left text-gray-500 border-b"><th class="py-2 pr-4">Date</th><th class="py-2 pr-4">Order</th><th class="py-2 pr-4">Customer</th><th class="py-2 pr-4">Store</th><th class="py-2 pr-4">Method</th><th class="py-2 pr-4">Amount</th><th class="py-2 pr-4">Vendor net</th><th class="py-2 pr-4">Commission</th><th class="py-2">Status</th></tr></thead>
+          <tbody>
+            <?php foreach ($paymentList as $p): ?>
+              <tr class="border-b last:border-0">
+                <td class="py-3 pr-4 whitespace-nowrap text-gray-500"><?= e(substr((string) ($p['created_at'] ?? ''), 0, 16)) ?></td>
+                <td class="py-3 pr-4 font-medium"><?= e($p['orderId']) ?></td>
+                <td class="py-3 pr-4"><?= e($p['customerName'] ?: '—') ?></td>
+                <td class="py-3 pr-4"><?= e($p['vendor'] ?: '—') ?></td>
+                <td class="py-3 pr-4"><span class="text-xs border rounded-full px-2 py-1"><?= e($p['method']) ?></span></td>
+                <td class="py-3 pr-4 font-semibold">₹<?= e($p['amount']) ?></td>
+                <td class="py-3 pr-4 text-green-700">₹<?= e($p['vendorNet']) ?></td>
+                <td class="py-3 pr-4 text-purple-700">₹<?= e($p['commission']) ?></td>
+                <td class="py-3"><span class="text-xs font-medium px-2 py-1 rounded-full <?= ($p['status'] ?? '') === 'Paid' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700' ?>"><?= ($p['status'] ?? '') === 'Paid' ? 'Paid' : 'Pay on delivery' ?></span></td>
+              </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
+      <?php else: empty_state('No payments yet. Customer payments will appear here.', 'receipt'); endif; ?>
     </div>
   </div>
 

@@ -94,7 +94,7 @@ switch ($do) {
     if ($num) {
       $savedMsg = $discount > 0 ? " You saved ₹$discount." : '';
       set_flash("Order $num confirmed! Payment: $payment. $deliveryOption.$savedMsg You can track it here.", 'success');
-      header('Location: orders.php');
+      header('Location: orders.php?paid=' . urlencode($num));
     } else {
       set_flash('Your cart is empty.', 'error');
       header('Location: cart.php');
@@ -137,7 +137,7 @@ switch ($do) {
       order_set_payment_ref($num, $rzpPaymentId);
       $saved = (int) $pending['discount'] > 0 ? ' You saved ₹' . (int) $pending['discount'] . '.' : '';
       set_flash("Payment successful! Order $num confirmed." . $saved . " You can track it here.", 'success');
-      header('Location: orders.php');
+      header('Location: orders.php?paid=' . urlencode($num));
     } else {
       set_flash('Your cart is empty.', 'error');
       header('Location: cart.php');

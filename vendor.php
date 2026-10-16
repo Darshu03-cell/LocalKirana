@@ -56,6 +56,7 @@ $shell = [
     ['id' => 'dashboard', 'icon' => 'layout-dashboard', 'label' => 'Dashboard'],
     ['id' => 'products',  'icon' => 'package',          'label' => 'Products'],
     ['id' => 'orders',    'icon' => 'shopping-cart',    'label' => 'Orders', 'badge' => $pendingCnt ? (string) $pendingCnt : null],
+    ['id' => 'payments',  'icon' => 'receipt',          'label' => 'Payments'],
     ['id' => 'analytics', 'icon' => 'trending-up',      'label' => 'Analytics'],
     ['id' => 'settings',  'icon' => 'settings',         'label' => 'Settings'],
   ],
@@ -341,6 +342,47 @@ render_dashboard_start($shell);
           <div class="text-center p-4 bg-gray-50 rounded-lg"><p class="text-3xl font-bold <?= $m[2] ?>"><?= e($m[0]) ?></p><p class="text-sm text-gray-600 mt-2"><?= e($m[1]) ?></p></div>
         <?php endforeach; ?>
       </div>
+    </div>
+  </div>
+
+<?php elseif ($tab === 'payments'): ?>
+  <?php
+    // The vendor's payments are their share of each order (per-store amount), with
+    // the platform/admin commission broken out. Derived from their orders so
+    // multi-store orders show only this store's slice correctly.
+    $myNet = $acct['vendorNet']; $myComm = $acct['commission'];
+    $paidOrders = array_values(array_filter($vendorOrders, fn($o) => order_payment_status($o) === 'Paid'));
+    $paidTotal  = array_sum(array_column($paidOrders, 'total'));
+  ?>
+  <div class="space-y-6">
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <?php
+      stat_card('₹' . number_format($myNet), 'Your Net Earnings', 'wallet', 'bg-green-100', 'text-green-600');
+      stat_card('₹' . number_format($myComm), 'Platform Commission', 'percent', 'bg-purple-100', 'text-purple-600');
+      stat_card('₹' . number_format($paidTotal), 'Collected (Paid)', 'indian-rupee', 'bg-blue-100', 'text-blue-600');
+      ?>
+    </div>
+    <div class="bg-white rounded-xl border p-6 overflow-x-auto">
+      <h3 class="font-bold text-lg mb-4">Payment History</h3>
+      <?php if ($vendorOrders): ?>
+        <table class="w-full text-sm">
+          <thead><tr class="text-left text-gray-500 border-b"><th class="py-2 pr-4">Date</th><th class="py-2 pr-4">Order</th><th class="py-2 pr-4">Customer</th><th class="py-2 pr-4">Amount</th><th class="py-2 pr-4">Commission</th><th class="py-2 pr-4">Your net</th><th class="py-2 pr-4">Method</th><th class="py-2">Status</th></tr></thead>
+          <tbody>
+            <?php foreach ($vendorOrders as $o): $eco = order_economics((int) $o['total']); $ps = order_payment_status($o); ?>
+              <tr class="border-b last:border-0">
+                <td class="py-3 pr-4 whitespace-nowrap text-gray-500"><?= e($o['date']) ?></td>
+                <td class="py-3 pr-4 font-medium"><?= e($o['id']) ?><?php if (!empty($o['multiStore'])): ?><br><span class="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">Your items</span><?php endif; ?></td>
+                <td class="py-3 pr-4"><?= e($o['customerName']) ?></td>
+                <td class="py-3 pr-4 font-semibold">₹<?= e($o['total']) ?></td>
+                <td class="py-3 pr-4 text-purple-700">₹<?= e($eco['commission']) ?></td>
+                <td class="py-3 pr-4 text-green-700 font-semibold">₹<?= e($eco['vendorNet']) ?></td>
+                <td class="py-3 pr-4"><span class="text-xs border rounded-full px-2 py-1"><?= e($o['paymentMethod']) ?></span></td>
+                <td class="py-3"><span class="text-xs font-medium px-2 py-1 rounded-full <?= $ps === 'Paid' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700' ?>"><?= $ps === 'Paid' ? 'Paid' : 'Pay on delivery' ?></span></td>
+              </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
+      <?php else: empty_state('No payments yet. Payments for your store will appear here.', 'receipt'); endif; ?>
     </div>
   </div>
 

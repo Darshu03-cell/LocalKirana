@@ -381,6 +381,9 @@ function product_delete(int $id): void {
 
 function order_set_status(string $id, string $status): void {
   db_exec("UPDATE orders SET status = :s WHERE id = :id", [':s' => $status, ':id' => $id]);
+  // Once delivered, any Cash-on-Delivery amount has now been collected — settle the
+  // payment history (prepaid rows are already Paid, so this is a no-op for them).
+  if ($status === 'Delivered') payment_mark_paid($id);
   // Let the customer know their order moved along.
   $o = db_row("SELECT customerEmail FROM orders WHERE id = :id", [':id' => $id]);
   if ($o && !empty($o['customerEmail'])) {
@@ -396,6 +399,53 @@ function order_set_payment_status(string $id, string $status): void {
 /** Record the Razorpay payment reference against a prepaid order. */
 function order_set_payment_ref(string $id, string $ref): void {
   db_exec("UPDATE orders SET paymentRef = :r WHERE id = :id", [':r' => $ref, ':id' => $id]);
+  payment_mark_paid($id, $ref); // keep the payment history row in sync
+}
+
+/* ---------------------------- payments (history) --------------------------- */
+
+/** Record a payment / transaction for an order — the durable history row behind
+ *  the customer receipt popup and the customer/vendor/admin payment history.
+ *  Captures the money split (vendor share vs platform/admin commission). */
+function payment_record(string $orderId, string $customerEmail, string $customerName, string $vendor,
+                        int $amount, string $method, string $status, string $ref = ''): void {
+  $eco = order_economics(max(0, $amount));
+  db_exec("INSERT INTO payments (orderId, customerEmail, customerName, vendor, amount, method, status, ref, commission, vendorNet, created_at)
+           VALUES (:oid, :ce, :cn, :v, :amt, :m, :st, :ref, :comm, :vnet, :ts)", [
+    ':oid'  => $orderId,
+    ':ce'   => strtolower(trim($customerEmail)),
+    ':cn'   => $customerName,
+    ':v'    => $vendor,
+    ':amt'  => $amount,
+    ':m'    => $method,
+    ':st'   => $status,
+    ':ref'  => $ref,
+    ':comm' => $eco['commission'],
+    ':vnet' => $eco['vendorNet'],
+    ':ts'   => date('Y-m-d H:i:s'),
+  ]);
+}
+
+/** Every payment, newest first (the admin's platform-wide transaction history). */
+function payments_all(): array { return db_all("SELECT * FROM payments ORDER BY id DESC"); }
+
+/** One customer's payment history, newest first. */
+function payments_for_customer(string $email): array {
+  return db_all("SELECT * FROM payments WHERE lower(customerEmail) = lower(:e) ORDER BY id DESC", [':e' => trim($email)]);
+}
+
+/** The payment row for a given order (null if none recorded). */
+function payment_for_order(string $orderId): ?array {
+  return db_row("SELECT * FROM payments WHERE orderId = :id ORDER BY id DESC LIMIT 1", [':id' => $orderId]);
+}
+
+/** Mark an order's payment as collected (Paid) — prepaid verified, or COD delivered. */
+function payment_mark_paid(string $orderId, string $ref = ''): void {
+  if ($ref !== '') {
+    db_exec("UPDATE payments SET status = 'Paid', ref = :r WHERE orderId = :id", [':r' => $ref, ':id' => $orderId]);
+  } else {
+    db_exec("UPDATE payments SET status = 'Paid' WHERE orderId = :id", [':id' => $orderId]);
+  }
 }
 
 /** Resolved payment status for an order (derives one for older rows). */
@@ -486,6 +536,11 @@ function place_order(?array $user = null, string $payment = 'Cash on Delivery', 
       ':pid' => $partner['id'],
     ]);
   }
+
+  // Record the payment in the history. Prepaid is Paid now; Cash on Delivery is
+  // Pending until it's collected on delivery (see order_set_status('Delivered')).
+  payment_record($num, $user['email'] ?? '', $user['name'] ?? 'Guest', $vendorName ?: 'Local store',
+                 (int) $total, $payment, $payStatus === 'Paid' ? 'Paid' : 'Pending');
 
   // ---- Notifications to everyone involved ----
   $cust = $user['email'] ?? '';

@@ -10,6 +10,16 @@ $unreadNotifs = notifications_unread_count('customer', $user['email'] ?? '');
 // drives one map (rendered with Leaflet + OpenStreetMap at the bottom of the page).
 $trackPayload = [];
 
+// Payment history (stored transactions) + the just-paid order, if we arrived here
+// straight from checkout (?paid=#ORDxxx) — that one gets a confirmation popup.
+$myPayments = payments_for_customer($user['email'] ?? '');
+$paidId     = trim((string) ($_GET['paid'] ?? ''));
+$paidOrder  = null;
+if ($paidId !== '') {
+  foreach ($myOrders as $o) { if ((string) $o['id'] === $paidId) { $paidOrder = $o; break; } }
+}
+$paidEco = $paidOrder ? order_economics((int) $paidOrder['total']) : null;
+
 $STEPS = ['Pending', 'Processing', 'In Transit', 'Delivered'];
 function step_index(string $status): int {
   $steps = ['Pending' => 0, 'Processing' => 1, 'In Transit' => 2, 'Delivered' => 3];
@@ -22,6 +32,12 @@ function status_badge(string $status): string {
 function return_status_badge(string $status): string {
   $map = ['Approved' => 'bg-green-100 text-green-700', 'Refunded' => 'bg-emerald-100 text-emerald-700', 'Rejected' => 'bg-red-100 text-red-700', 'Requested' => 'bg-amber-100 text-amber-700'];
   return '<span class="text-xs font-medium px-2.5 py-1 rounded-full ' . ($map[$status] ?? 'bg-gray-100 text-gray-700') . '">' . e($status) . '</span>';
+}
+function pay_status_badge(string $status): string {
+  // Cash on Delivery is "Pending" until collected; prepaid is "Paid".
+  $label = $status === 'Paid' ? 'Paid' : 'Pay on delivery';
+  $cls   = $status === 'Paid' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700';
+  return '<span class="text-xs font-medium px-2.5 py-1 rounded-full ' . $cls . '">' . e($label) . '</span>';
 }
 
 $brand = brand_name();
@@ -71,6 +87,32 @@ require __DIR__ . '/partials/head.php';
             </li>
           <?php endforeach; ?>
         </ul>
+      </div>
+    <?php endif; ?>
+
+    <?php if ($myPayments): ?>
+      <div id="payment-history" class="bg-white rounded-xl border mb-8 overflow-hidden scroll-mt-24">
+        <div class="flex items-center justify-between px-5 py-3 border-b bg-gray-50">
+          <h3 class="font-semibold flex items-center gap-2"><i data-lucide="receipt" class="w-4 h-4 text-green-600"></i>Payment History</h3>
+          <span class="text-xs text-gray-500"><?= count($myPayments) ?> transaction<?= count($myPayments) === 1 ? '' : 's' ?></span>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead><tr class="text-left text-gray-500 border-b"><th class="py-2.5 px-5">Date</th><th class="py-2.5 pr-4">Order</th><th class="py-2.5 pr-4">Store</th><th class="py-2.5 pr-4">Method</th><th class="py-2.5 pr-4">Amount</th><th class="py-2.5 pr-5">Status</th></tr></thead>
+            <tbody>
+              <?php foreach ($myPayments as $p): ?>
+                <tr class="border-b last:border-0">
+                  <td class="py-3 px-5 whitespace-nowrap text-gray-500"><?= e(substr((string) ($p['created_at'] ?? ''), 0, 16)) ?></td>
+                  <td class="py-3 pr-4 font-medium"><?= e($p['orderId']) ?></td>
+                  <td class="py-3 pr-4"><?= e($p['vendor'] ?: 'Local store') ?></td>
+                  <td class="py-3 pr-4"><span class="text-xs border rounded-full px-2 py-1"><?= e($p['method']) ?></span></td>
+                  <td class="py-3 pr-4 font-semibold">₹<?= e($p['amount']) ?></td>
+                  <td class="py-3 pr-5"><?= pay_status_badge($p['status'] ?? '') ?></td>
+                </tr>
+              <?php endforeach; ?>
+            </tbody>
+          </table>
+        </div>
       </div>
     <?php endif; ?>
 
@@ -250,6 +292,64 @@ require __DIR__ . '/partials/head.php';
   </main>
 </div>
 
+<?php if ($paidOrder): $paidStatus = order_payment_status($paidOrder); ?>
+  <!-- Payment confirmation popup (shown once, right after checkout) -->
+  <div id="pay-receipt" class="fixed inset-0 z-[95] flex items-center justify-center bg-black/50 p-4">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+      <div class="bg-green-600 text-white px-6 py-6 text-center">
+        <div class="w-14 h-14 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-3">
+          <i data-lucide="check" class="w-8 h-8"></i>
+        </div>
+        <h3 class="text-xl font-bold"><?= $paidStatus === 'Paid' ? 'Payment successful' : 'Order confirmed' ?></h3>
+        <p class="text-green-100 text-sm mt-1">Order <?= e($paidOrder['id']) ?> · <?= e($paidOrder['date']) ?></p>
+      </div>
+      <div class="p-6 space-y-4">
+        <div class="text-center">
+          <p class="text-sm text-gray-500">Amount <?= $paidStatus === 'Paid' ? 'paid' : 'payable' ?></p>
+          <p class="text-4xl font-bold text-gray-900">₹<?= e($paidOrder['total']) ?></p>
+          <div class="mt-2 flex items-center justify-center gap-2 text-sm text-gray-600">
+            <span class="inline-flex items-center gap-1"><i data-lucide="store" class="w-4 h-4"></i><?= e($paidOrder['vendor'] ?: 'Local store') ?></span>
+            <span>·</span>
+            <span><?= e($paidOrder['paymentMethod']) ?></span>
+            <?= pay_status_badge($paidStatus) ?>
+          </div>
+        </div>
+
+        <!-- Who receives what: the vendor and the platform/admin. -->
+        <div class="rounded-xl border bg-gray-50 divide-y">
+          <div class="flex items-center justify-between px-4 py-2.5 text-sm">
+            <span class="inline-flex items-center gap-2 text-gray-600"><span class="inline-block w-2.5 h-2.5 rounded-full bg-green-600"></span>Vendor receives</span>
+            <span class="font-semibold">₹<?= e($paidEco['vendorNet']) ?></span>
+          </div>
+          <div class="flex items-center justify-between px-4 py-2.5 text-sm">
+            <span class="inline-flex items-center gap-2 text-gray-600"><span class="inline-block w-2.5 h-2.5 rounded-full bg-purple-600"></span>Platform &amp; admin</span>
+            <span class="font-semibold">₹<?= e($paidEco['commission']) ?></span>
+          </div>
+        </div>
+
+        <p class="text-xs text-gray-500 flex items-start gap-1.5">
+          <i data-lucide="info" class="w-3.5 h-3.5 mt-0.5 flex-shrink-0"></i>
+          The store and our team have been notified. This payment is saved to your Payment History.
+        </p>
+
+        <div class="flex gap-3 pt-1">
+          <a href="#payment-history" onclick="document.getElementById('pay-receipt').remove()" class="flex-1 text-center border rounded-lg px-4 py-2.5 text-sm hover:bg-gray-50">View history</a>
+          <button type="button" onclick="document.getElementById('pay-receipt').remove()" class="flex-1 bg-green-600 hover:bg-green-700 text-white rounded-lg px-4 py-2.5 text-sm font-medium">Done</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var o = document.getElementById('pay-receipt');
+      if (!o) return;
+      o.addEventListener('click', function (e) { if (e.target === o) o.remove(); });
+      document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && document.getElementById('pay-receipt')) o.remove(); });
+      if (window.lucide) lucide.createIcons();
+    })();
+  </script>
+<?php endif; ?>
+
 <?php if (!empty($trackPayload)): ?>
   <!-- Leaflet (free OpenStreetMap maps — no API key needed) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -261,8 +361,9 @@ require __DIR__ . '/partials/head.php';
     try { DATA = JSON.parse(document.getElementById('track-data').textContent); } catch (e) { return; }
     if (!window.L || !DATA || !DATA.length) return;
 
-    // Fallback centre (used only if an address can't be geocoded): Bengaluru.
-    var FALLBACK = [12.9716, 77.5946];
+    // Home region: Hassan, Karnataka (PIN 573201). Used as the map centre when an
+    // address can't be geocoded, and to bias address lookups to this area.
+    var FALLBACK = [13.0072, 76.0962];
     var animants = []; // active rider animations, advanced by one shared loop
 
     // Deterministic 0..1 pseudo-random from a string, so each order's synthetic
@@ -331,9 +432,14 @@ require __DIR__ . '/partials/head.php';
 
     function geocode(address) {
       if (!address) return Promise.resolve(null);
-      var key = 'lkgeo:' + address;
+      // Anchor vague addresses to Hassan so "MG Road" resolves here, not in Bangalore.
+      var q = /hassan/i.test(address) ? address : address + ', Hassan, Karnataka';
+      // Cache key is bumped to lkgeo2 so stale Bengaluru lookups are re-resolved.
+      var key = 'lkgeo2:' + q;
       try { var cached = localStorage.getItem(key); if (cached) return Promise.resolve(JSON.parse(cached)); } catch (e) {}
-      var url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=in&q=' + encodeURIComponent(address);
+      // viewbox biases results to the Hassan district (left,top,right,bottom lon/lat).
+      var url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=in'
+              + '&viewbox=75.80,13.30,76.40,12.75&q=' + encodeURIComponent(q);
       return fetch(url, { headers: { 'Accept': 'application/json' } })
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (d) {

@@ -116,6 +116,15 @@ function db_init(PDO $pdo): void {
     link TEXT, is_read INTEGER, created_at TEXT
   )");
   try { $pdo->exec("CREATE INDEX IF NOT EXISTS idx_notif_inbox ON notifications (role, recipient, is_read)"); } catch (Throwable $e) {}
+  // Payment / transaction history — one row per order's payment. Stores the money
+  // split (what the vendor receives vs the platform/admin commission) so the
+  // customer receipt popup and the customer/vendor/admin history all agree.
+  $pdo->exec("CREATE TABLE IF NOT EXISTS payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, orderId TEXT, customerEmail TEXT, customerName TEXT,
+    vendor TEXT, amount INTEGER, method TEXT, status TEXT, ref TEXT,
+    commission INTEGER, vendorNet INTEGER, created_at TEXT
+  )");
+  try { $pdo->exec("CREATE INDEX IF NOT EXISTS idx_payments_cust ON payments (customerEmail)"); } catch (Throwable $e) {}
 }
 
 /* --------------------------- tiny query helpers --------------------------- */
