@@ -6,6 +6,10 @@ $myOrders = customer_orders($user['email'] ?? '');
 $myNotifs = notifications_for('customer', $user['email'] ?? '', 15);
 $unreadNotifs = notifications_unread_count('customer', $user['email'] ?? '');
 
+// Live-tracking data for Home Delivery orders still on their way. Each entry
+// drives one map (rendered with Leaflet + OpenStreetMap at the bottom of the page).
+$trackPayload = [];
+
 $STEPS = ['Pending', 'Processing', 'In Transit', 'Delivered'];
 function step_index(string $status): int {
   $steps = ['Pending' => 0, 'Processing' => 1, 'In Transit' => 2, 'Delivered' => 3];
@@ -116,6 +120,54 @@ require __DIR__ . '/partials/head.php';
                 </div>
               <?php endif; ?>
 
+              <?php
+                // Live delivery map: only for Home Delivery orders that are on their
+                // way (not cancelled). Picks up the delivery partner's sub-status too.
+                $isHomeDelivery = ($o['deliveryOption'] ?? '') === 'Home Delivery';
+                if ($isHomeDelivery && $o['status'] !== 'Cancelled'):
+                  $dlv       = delivery_for_order($o['id']);
+                  $subStatus = $dlv['status'] ?? '';
+                  $trackAddr = order_delivery_address($o);
+                  $mapId     = 'map-' . preg_replace('/[^A-Za-z0-9]/', '', (string) $o['id']);
+                  $isLive    = $o['status'] === 'In Transit' || $subStatus === 'Picked Up';
+                  $isDone    = $o['status'] === 'Delivered';
+                  $trackPayload[] = [
+                    'mapId'     => $mapId,
+                    'orderId'   => (string) $o['id'],
+                    'status'    => $o['status'],
+                    'subStatus' => $subStatus,
+                    'address'   => $trackAddr,
+                    'store'     => $o['vendor'] ?: 'Local store',
+                    'rider'     => $o['deliveryPartner'] ?: 'Delivery partner',
+                  ];
+              ?>
+                <div class="mt-6 border-t pt-4">
+                  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <p class="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                      <i data-lucide="navigation" class="w-4 h-4 text-green-600"></i>Live delivery tracking
+                    </p>
+                    <?php if ($isDone): ?>
+                      <span class="inline-flex items-center gap-1.5 text-xs font-medium text-green-700 bg-green-100 rounded-full px-2.5 py-1"><i data-lucide="check-circle" class="w-3.5 h-3.5"></i>Delivered</span>
+                    <?php elseif ($isLive): ?>
+                      <span class="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-100 rounded-full px-2.5 py-1"><span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-blue-600"></span></span>Live · on the way</span>
+                    <?php else: ?>
+                      <span class="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700 bg-amber-100 rounded-full px-2.5 py-1"><i data-lucide="clock" class="w-3.5 h-3.5"></i>Preparing your order</span>
+                    <?php endif; ?>
+                  </div>
+                  <div id="<?= e($mapId) ?>" class="tracking-map w-full h-64 rounded-lg overflow-hidden border bg-gray-100 relative z-0">
+                    <div class="absolute inset-0 flex items-center justify-center text-sm text-gray-400 gap-2"><i data-lucide="loader" class="w-4 h-4 animate-spin"></i>Loading map…</div>
+                  </div>
+                  <div class="flex items-center justify-between mt-2 flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                    <div class="flex items-center gap-4">
+                      <span class="inline-flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-full bg-amber-500"></span><?= e($o['vendor'] ?: 'Local store') ?></span>
+                      <span class="inline-flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-full bg-blue-600"></span><?= e($o['deliveryPartner'] ?: 'Delivery partner') ?></span>
+                      <span class="inline-flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-full bg-green-600"></span>You</span>
+                    </div>
+                    <span class="tracking-eta font-medium text-gray-600" data-eta-for="<?= e($mapId) ?>"></span>
+                  </div>
+                </div>
+              <?php endif; ?>
+
               <?php $lines = order_items($o['id']); if ($lines): ?>
                 <div class="mt-6 border-t pt-4">
                   <p class="text-xs font-medium text-gray-500 mb-2">Items</p>
@@ -197,4 +249,181 @@ require __DIR__ . '/partials/head.php';
     <?php endif; ?>
   </main>
 </div>
+
+<?php if (!empty($trackPayload)): ?>
+  <!-- Leaflet (free OpenStreetMap maps — no API key needed) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script id="track-data" type="application/json"><?= json_encode($trackPayload, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?></script>
+  <script>
+  (function () {
+    var DATA;
+    try { DATA = JSON.parse(document.getElementById('track-data').textContent); } catch (e) { return; }
+    if (!window.L || !DATA || !DATA.length) return;
+
+    // Fallback centre (used only if an address can't be geocoded): Bengaluru.
+    var FALLBACK = [12.9716, 77.5946];
+    var animants = []; // active rider animations, advanced by one shared loop
+
+    // Deterministic 0..1 pseudo-random from a string, so each order's synthetic
+    // store position (and fallback point) stays stable across refreshes.
+    function hash01(str, salt) {
+      var s = (salt || '') + str, h = 2166136261;
+      for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 16777619) >>> 0; }
+      return (h % 100000) / 100000;
+    }
+
+    // Move a lat/lng by `meters` along a compass bearing (degrees).
+    function offset(pt, meters, bearingDeg) {
+      var R = 6378137, br = bearingDeg * Math.PI / 180;
+      var dLat = (meters * Math.cos(br)) / R;
+      var dLng = (meters * Math.sin(br)) / (R * Math.cos(pt[0] * Math.PI / 180));
+      return [pt[0] + dLat * 180 / Math.PI, pt[1] + dLng * 180 / Math.PI];
+    }
+
+    function metersBetween(a, b) {
+      var R = 6371000, toR = Math.PI / 180;
+      var dLat = (b[0] - a[0]) * toR, dLng = (b[1] - a[1]) * toR;
+      var la1 = a[0] * toR, la2 = b[0] * toR;
+      var x = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(la1) * Math.cos(la2);
+      return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
+    }
+
+    // A gently curved path (quadratic bezier) store -> you, so the route doesn't
+    // look like a robotic straight line.
+    function bezier(a, c, b, t) {
+      var u = 1 - t;
+      return [
+        u * u * a[0] + 2 * u * t * c[0] + t * t * b[0],
+        u * u * a[1] + 2 * u * t * c[1] + t * t * b[1]
+      ];
+    }
+    function controlPoint(a, b, order) {
+      var mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      var bend = (hash01(order, 'bend') - 0.5) * 0.4; // sign + size of the curve
+      // perpendicular to the a->b direction
+      return [mid[0] + (b[1] - a[1]) * bend, mid[1] - (b[0] - a[0]) * bend];
+    }
+
+    function routePoints(a, c, b) {
+      var pts = [];
+      for (var i = 0; i <= 48; i++) pts.push(bezier(a, c, b, i / 48));
+      return pts;
+    }
+
+    // How far along the route the rider should be (0 = store, 1 = your door).
+    function targetFor(status, sub) {
+      if (status === 'Delivered') return 1;
+      if (status === 'In Transit' || sub === 'Picked Up') return 0.9;
+      if (status === 'Processing' || sub === 'Assigned') return 0.12;
+      return 0.04; // Pending
+    }
+
+    function emojiIcon(emoji, ring) {
+      return L.divIcon({
+        className: '',
+        html: '<div style="font-size:22px;line-height:28px;width:28px;height:28px;text-align:center;' +
+              'filter:drop-shadow(0 1px 2px rgba(0,0,0,.35));' + (ring ? '' : '') + '">' + emoji + '</div>',
+        iconSize: [28, 28], iconAnchor: [14, 14]
+      });
+    }
+
+    function geocode(address) {
+      if (!address) return Promise.resolve(null);
+      var key = 'lkgeo:' + address;
+      try { var cached = localStorage.getItem(key); if (cached) return Promise.resolve(JSON.parse(cached)); } catch (e) {}
+      var url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=in&q=' + encodeURIComponent(address);
+      return fetch(url, { headers: { 'Accept': 'application/json' } })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          if (d && d[0]) {
+            var pt = [parseFloat(d[0].lat), parseFloat(d[0].lon)];
+            try { localStorage.setItem(key, JSON.stringify(pt)); } catch (e) {}
+            return pt;
+          }
+          return null;
+        })
+        .catch(function () { return null; });
+    }
+
+    function etaText(entry, frac, distM) {
+      if (entry.status === 'Delivered') return 'Delivered 🎉';
+      if (entry.status === 'In Transit' || entry.subStatus === 'Picked Up') {
+        var remaining = (1 - frac) * distM;          // metres left
+        var mins = Math.max(1, Math.round(remaining / 250)); // ~15 km/h
+        return 'Arriving in about ' + mins + ' min';
+      }
+      if (entry.status === 'Processing' || entry.subStatus === 'Assigned') return 'Store is preparing your order';
+      return 'Waiting for the store to confirm';
+    }
+
+    function buildMap(entry, you) {
+      var el = document.getElementById(entry.mapId);
+      if (!el) return;
+      el.innerHTML = ''; // clear the "Loading…" placeholder
+
+      var store = offset(you, 1600 + Math.round(hash01(entry.orderId, 'd') * 1400),
+                              Math.round(hash01(entry.orderId, 'a') * 360));
+      var ctrl  = controlPoint(store, you, entry.orderId);
+      var route = routePoints(store, ctrl, you);
+      var distM = metersBetween(store, you);
+
+      var map = L.map(entry.mapId, { scrollWheelZoom: false, zoomControl: true, attributionControl: true });
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(map);
+      map.fitBounds(L.latLngBounds(route).pad(0.25));
+
+      L.polyline(route, { color: '#16a34a', weight: 4, opacity: 0.6, dashArray: '2 8', lineCap: 'round' }).addTo(map);
+      L.marker(store, { icon: emojiIcon('🏪') }).addTo(map).bindPopup('Store · ' + entry.store);
+      L.marker(you,   { icon: emojiIcon('📍') }).addTo(map).bindPopup('Delivering to you');
+
+      var rider = L.marker(bezier(store, ctrl, you, 0), { icon: emojiIcon('🛵'), zIndexOffset: 1000 })
+                   .addTo(map).bindPopup('Rider · ' + entry.rider);
+
+      var etaEl = document.querySelector('.tracking-eta[data-eta-for="' + entry.mapId + '"]');
+      var target = targetFor(entry.status, entry.subStatus);
+      var moving = entry.status !== 'Delivered' && target >= 0.9;
+
+      animants.push({
+        entry: entry, store: store, ctrl: ctrl, you: you, dist: distM,
+        rider: rider, etaEl: etaEl, cur: Math.min(target, 0.12),
+        target: target, moving: moving
+      });
+    }
+
+    // One animation loop drives every rider so motion stays smooth and cheap.
+    function tick() {
+      var now = Date.now();
+      for (var i = 0; i < animants.length; i++) {
+        var a = animants[i];
+        var tgt = a.target;
+        // While "on the way", hover near the destination so it feels live without
+        // ever arriving before the order is actually marked Delivered.
+        if (a.moving) tgt = 0.86 + 0.05 * Math.sin(now / 1600);
+        a.cur += (tgt - a.cur) * 0.04; // ease toward the target
+        var p = bezier(a.store, a.ctrl, a.you, a.cur);
+        a.rider.setLatLng(p);
+        if (a.etaEl) a.etaEl.textContent = etaText(a.entry, a.cur, a.dist);
+      }
+      requestAnimationFrame(tick);
+    }
+
+    // Build each map in sequence so we stay within Nominatim's ~1 req/sec limit.
+    var idx = 0;
+    function next() {
+      if (idx >= DATA.length) { requestAnimationFrame(tick); return; }
+      var entry = DATA[idx++];
+      geocode(entry.address).then(function (pt) {
+        var you = pt || offset(FALLBACK, 500 + hash01(entry.orderId, 'f') * 2500, hash01(entry.orderId, 'g') * 360);
+        try { buildMap(entry, you); } catch (e) {}
+        if (pt) { setTimeout(next, 1100); } else { next(); } // throttle only real lookups
+      });
+    }
+    next();
+  })();
+  </script>
+<?php endif; ?>
+
 <?php require __DIR__ . '/partials/foot.php'; ?>

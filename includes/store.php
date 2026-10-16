@@ -157,6 +157,11 @@ function deliveries(): array           { return db_all("SELECT * FROM deliveries
 function deliveries_for_partner(int $pid): array {
   return db_all("SELECT * FROM deliveries WHERE partnerId = :pid ORDER BY id", [':pid' => $pid]);
 }
+/** The live delivery job for an order (null once completed/delivered). Used by the
+ *  customer's live tracking map to show the Assigned / Picked Up sub-status. */
+function delivery_for_order(string $orderId): ?array {
+  return db_row("SELECT * FROM deliveries WHERE id = :id", [':id' => $orderId]);
+}
 /** The delivery_partners row for a signed-in partner, matched by login email. */
 function delivery_partner_by_email(string $email): ?array {
   return db_row("SELECT * FROM delivery_partners WHERE lower(email) = lower(:e)", [':e' => trim($email)]);
