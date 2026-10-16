@@ -426,8 +426,18 @@ switch ($do) {
 
   /* ------------------------------- delivery ------------------------------- */
   case 'delivery_advance':
-    delivery_advance($_POST['id']);
-    set_flash('Delivery ' . $_POST['id'] . ' updated.');
+    if (!$user || ($user['role'] ?? '') !== 'delivery') { header('Location: login.php'); exit; }
+    $before = delivery_for_order($_POST['id'] ?? '');
+    delivery_advance($_POST['id'] ?? '', $user['name'] ?? '');
+    // A "Picked Up" row that we just completed means cash (for COD) was collected.
+    if ($before && ($before['status'] ?? '') === 'Picked Up') {
+      $pay = payment_for_order($_POST['id'] ?? '');
+      set_flash(($pay && !empty($pay['collectedBy']))
+        ? ('Delivered. ₹' . (int) $pay['amount'] . ' cash collected — the store has been notified.')
+        : ('Delivery ' . ($_POST['id'] ?? '') . ' completed.'));
+    } else {
+      set_flash('Delivery ' . ($_POST['id'] ?? '') . ' updated.');
+    }
     header('Location: ' . safe_redirect('delivery.php'));
     exit;
 

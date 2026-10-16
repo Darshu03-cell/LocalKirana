@@ -15,6 +15,32 @@ function maps_link(string $address): string {
   return 'https://www.google.com/maps/search/?api=1&query=' . urlencode($address);
 }
 
+/** Cash on Delivery jobs need the amount collected on hand-over. */
+function delivery_is_cod(array $d): bool { return ($d['paymentMethod'] ?? '') === 'Cash on Delivery'; }
+
+/** Button label: pick up, then collect-cash (COD) or just complete (prepaid). */
+function delivery_action_label(array $d): string {
+  if (($d['status'] ?? '') === 'Assigned') return 'Pick Up Order';
+  return delivery_is_cod($d) ? ('Collect ₹' . (int) ($d['amount'] ?? 0) . ' & Complete') : 'Complete Delivery';
+}
+
+/** Confirmation prompt shown before completing a delivery. */
+function delivery_confirm_msg(array $d): string {
+  if (($d['status'] ?? '') !== 'Picked Up') return '';
+  return delivery_is_cod($d)
+    ? ('Collect ₹' . (int) ($d['amount'] ?? 0) . ' cash and mark this order delivered?')
+    : 'Confirm delivery complete?';
+}
+
+/** Small payment chip: amber "cash to collect" (COD) or green "prepaid". */
+function delivery_pay_chip(array $d): void {
+  if (delivery_is_cod($d)) {
+    echo '<span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 text-amber-800 px-2.5 py-1 text-xs font-medium"><i data-lucide="wallet" class="w-3.5 h-3.5"></i>Cash to collect: ₹' . (int) ($d['amount'] ?? 0) . '</span>';
+  } else {
+    echo '<span class="inline-flex items-center gap-1.5 rounded-full bg-green-100 text-green-700 px-2.5 py-1 text-xs font-medium"><i data-lucide="check-circle" class="w-3.5 h-3.5"></i>Prepaid · paid online</span>';
+  }
+}
+
 $nf = dashboard_notif_shell('delivery', $user['email'] ?? '');
 
 $shell = [
@@ -56,10 +82,11 @@ render_dashboard_start($shell);
                 <span class="text-lg font-bold text-green-600">₹<?= e($d['amount'] ?? 0) ?></span>
               </div>
               <div class="flex items-start gap-2 mb-3 text-sm text-gray-600"><i data-lucide="map-pin" class="w-4 h-4 mt-0.5 flex-shrink-0"></i><p><?= e($d['address'] ?? '') ?></p></div>
+              <div class="mb-3"><?php delivery_pay_chip($d); ?></div>
               <div class="flex items-center justify-between pt-3 border-t flex-wrap gap-2">
                 <span class="text-sm">OTP: <span class="font-bold text-green-600"><?= e($d['otp'] ?? '') ?></span></span>
                 <div class="flex gap-2">
-                  <form method="post" action="actions.php" <?= ($d['status'] ?? '') === 'Picked Up' ? 'data-confirm="Confirm delivery complete?"' : '' ?>><input type="hidden" name="do" value="delivery_advance" /><input type="hidden" name="id" value="<?= e($d['id']) ?>" /><button class="bg-green-600 hover:bg-green-700 text-white text-sm px-3 py-1.5 rounded-lg"><?= ($d['status'] ?? '') === 'Assigned' ? 'Pick Up Order' : 'Complete Delivery' ?></button></form>
+                  <form method="post" action="actions.php" <?php $c = delivery_confirm_msg($d); echo $c ? 'data-confirm="' . e($c) . '"' : ''; ?>><input type="hidden" name="do" value="delivery_advance" /><input type="hidden" name="id" value="<?= e($d['id']) ?>" /><button class="bg-green-600 hover:bg-green-700 text-white text-sm px-3 py-1.5 rounded-lg"><?= e(delivery_action_label($d)) ?></button></form>
                   <a href="<?= e(maps_link($d['address'] ?? '')) ?>" target="_blank" rel="noopener" class="text-sm border rounded-lg px-3 py-1.5 hover:bg-gray-50">Navigate</a>
                 </div>
               </div>
@@ -97,9 +124,12 @@ render_dashboard_start($shell);
             </div>
             <div class="text-right"><p class="text-sm text-gray-600">Order Amount</p><p class="text-2xl font-bold text-green-600">₹<?= e($d['amount'] ?? 0) ?></p></div>
           </div>
-          <div class="bg-gray-50 p-3 rounded-lg mb-4"><p class="text-xs text-gray-600 mb-1">Delivery OTP</p><p class="font-semibold text-green-600 text-lg"><?= e($d['otp'] ?? '') ?></p></div>
+          <div class="flex flex-wrap items-center gap-3 mb-4">
+            <div class="bg-gray-50 p-3 rounded-lg flex-1 min-w-[8rem]"><p class="text-xs text-gray-600 mb-1">Delivery OTP</p><p class="font-semibold text-green-600 text-lg"><?= e($d['otp'] ?? '') ?></p></div>
+            <div><?php delivery_pay_chip($d); ?></div>
+          </div>
           <div class="flex gap-3">
-            <form method="post" action="actions.php" class="flex-1" <?= ($d['status'] ?? '') === 'Picked Up' ? 'data-confirm="Confirm delivery complete?"' : '' ?>><input type="hidden" name="do" value="delivery_advance" /><input type="hidden" name="id" value="<?= e($d['id']) ?>" /><input type="hidden" name="redirect" value="delivery.php?tab=active" /><button class="w-full bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg"><?= ($d['status'] ?? '') === 'Assigned' ? 'Pick Up Order' : 'Complete Delivery' ?></button></form>
+            <form method="post" action="actions.php" class="flex-1" <?php $c = delivery_confirm_msg($d); echo $c ? 'data-confirm="' . e($c) . '"' : ''; ?>><input type="hidden" name="do" value="delivery_advance" /><input type="hidden" name="id" value="<?= e($d['id']) ?>" /><input type="hidden" name="redirect" value="delivery.php?tab=active" /><button class="w-full bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg"><?= e(delivery_action_label($d)) ?></button></form>
             <a href="<?= e(maps_link($d['address'] ?? '')) ?>" target="_blank" rel="noopener" class="flex-1 border rounded-lg px-4 py-2 flex items-center justify-center gap-2 hover:bg-gray-50"><i data-lucide="navigation" class="w-4 h-4"></i>Navigate</a>
           </div>
         </div>

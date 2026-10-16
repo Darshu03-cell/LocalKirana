@@ -125,6 +125,11 @@ function db_init(PDO $pdo): void {
     commission INTEGER, vendorNet INTEGER, created_at TEXT
   )");
   try { $pdo->exec("CREATE INDEX IF NOT EXISTS idx_payments_cust ON payments (customerEmail)"); } catch (Throwable $e) {}
+  // Who collected a Cash-on-Delivery amount, and when (the delivery partner's
+  // confirmation that the money was received). Empty for prepaid/online payments.
+  foreach (['collectedBy TEXT', 'collectedAt TEXT'] as $col) {
+    try { $pdo->exec("ALTER TABLE payments ADD COLUMN $col"); } catch (Throwable $e) {}
+  }
 }
 
 /* --------------------------- tiny query helpers --------------------------- */

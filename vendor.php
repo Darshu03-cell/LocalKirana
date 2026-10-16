@@ -368,7 +368,7 @@ render_dashboard_start($shell);
         <table class="w-full text-sm">
           <thead><tr class="text-left text-gray-500 border-b"><th class="py-2 pr-4">Date</th><th class="py-2 pr-4">Order</th><th class="py-2 pr-4">Customer</th><th class="py-2 pr-4">Amount</th><th class="py-2 pr-4">Commission</th><th class="py-2 pr-4">Your net</th><th class="py-2 pr-4">Method</th><th class="py-2">Status</th></tr></thead>
           <tbody>
-            <?php foreach ($vendorOrders as $o): $eco = order_economics((int) $o['total']); $ps = order_payment_status($o); ?>
+            <?php foreach ($vendorOrders as $o): $eco = order_economics((int) $o['total']); $pay = payment_for_order($o['id']); $ps = $pay['status'] ?? order_payment_status($o); $paid = $ps === 'Paid'; $prepaid = order_is_prepaid($o); $collectedBy = trim((string) ($pay['collectedBy'] ?? '')); ?>
               <tr class="border-b last:border-0">
                 <td class="py-3 pr-4 whitespace-nowrap text-gray-500"><?= e($o['date']) ?></td>
                 <td class="py-3 pr-4 font-medium"><?= e($o['id']) ?><?php if (!empty($o['multiStore'])): ?><br><span class="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">Your items</span><?php endif; ?></td>
@@ -377,7 +377,14 @@ render_dashboard_start($shell);
                 <td class="py-3 pr-4 text-purple-700">₹<?= e($eco['commission']) ?></td>
                 <td class="py-3 pr-4 text-green-700 font-semibold">₹<?= e($eco['vendorNet']) ?></td>
                 <td class="py-3 pr-4"><span class="text-xs border rounded-full px-2 py-1"><?= e($o['paymentMethod']) ?></span></td>
-                <td class="py-3"><span class="text-xs font-medium px-2 py-1 rounded-full <?= $ps === 'Paid' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700' ?>"><?= $ps === 'Paid' ? 'Paid' : 'Pay on delivery' ?></span></td>
+                <td class="py-3">
+                  <?php if ($paid): ?>
+                    <span class="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full bg-green-100 text-green-700"><i data-lucide="check-circle" class="w-3.5 h-3.5"></i>Received</span>
+                    <div class="text-[11px] text-gray-500 mt-0.5"><?= $prepaid ? 'Paid online' : ('Cash' . ($collectedBy !== '' ? ' · by ' . e($collectedBy) : ' collected')) ?></div>
+                  <?php else: ?>
+                    <span class="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full bg-amber-100 text-amber-700"><i data-lucide="clock" class="w-3.5 h-3.5"></i>Awaiting <?= $prepaid ? 'payment' : 'collection' ?></span>
+                  <?php endif; ?>
+                </td>
               </tr>
             <?php endforeach; ?>
           </tbody>

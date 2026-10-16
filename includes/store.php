@@ -153,9 +153,12 @@ function delivery_partners(): array    { return db_all("SELECT * FROM delivery_p
 function supplier_products(): array    { return db_all("SELECT * FROM supplier_products ORDER BY id"); }
 function supplier_requests(): array    { return db_all("SELECT * FROM supplier_requests ORDER BY id"); }
 function deliveries(): array           { return db_all("SELECT * FROM deliveries ORDER BY id"); }
-/** Active deliveries assigned to one partner (legacy unassigned rows show to nobody). */
+/** Active deliveries assigned to one partner (legacy unassigned rows show to nobody).
+ *  Joined to the order so the panel knows the payment method / amount to collect. */
 function deliveries_for_partner(int $pid): array {
-  return db_all("SELECT * FROM deliveries WHERE partnerId = :pid ORDER BY id", [':pid' => $pid]);
+  return db_all("SELECT d.*, o.paymentMethod AS paymentMethod, o.total AS orderTotal
+                 FROM deliveries d LEFT JOIN orders o ON o.id = d.id
+                 WHERE d.partnerId = :pid ORDER BY d.id", [':pid' => $pid]);
 }
 /** The live delivery job for an order (null once completed/delivered). Used by the
  *  customer's live tracking map to show the Assigned / Picked Up sub-status. */
@@ -445,6 +448,27 @@ function payment_mark_paid(string $orderId, string $ref = ''): void {
     db_exec("UPDATE payments SET status = 'Paid', ref = :r WHERE orderId = :id", [':r' => $ref, ':id' => $orderId]);
   } else {
     db_exec("UPDATE payments SET status = 'Paid' WHERE orderId = :id", [':id' => $orderId]);
+  }
+}
+
+/** The delivery partner confirms they collected the Cash-on-Delivery amount:
+ *  mark the payment Paid and record who collected it and when. */
+function payment_collect_cash(string $orderId, string $collectedBy): void {
+  db_exec("UPDATE payments SET status = 'Paid', collectedBy = :by, collectedAt = :ts WHERE orderId = :id",
+    [':by' => trim($collectedBy), ':ts' => date('Y-m-d H:i:s'), ':id' => $orderId]);
+}
+
+/** Notify every store involved in an order (handles multi-store orders). */
+function notify_order_vendors(array $order, string $title, string $body = '', string $link = ''): void {
+  $id = (string) ($order['id'] ?? '');
+  $vendors = array_unique(array_filter(array_map(fn($r) => trim((string) ($r['vendor'] ?? '')), order_items($id))));
+  if (!$vendors) {
+    $vn = trim((string) ($order['vendor'] ?? ''));
+    if ($vn !== '' && $vn !== 'Multiple Stores') $vendors = [$vn];
+  }
+  foreach ($vendors as $vn) {
+    $v = vendor_by_name($vn);
+    if ($v && !empty($v['email'])) notify('vendor', $v['email'], $title, $body, $link);
   }
 }
 
@@ -823,7 +847,7 @@ function approval_resolve(int $id): void {
 
 /* -------------------------------- delivery --------------------------------- */
 
-function delivery_advance(string $id): void {
+function delivery_advance(string $id, string $collectedBy = ''): void {
   $d = db_row("SELECT * FROM deliveries WHERE id = :id", [':id' => $id]);
   if (!$d) return;
   if (($d['status'] ?? '') === 'Assigned') {
@@ -832,14 +856,28 @@ function delivery_advance(string $id): void {
     if ($o && !empty($o['customerEmail'])) {
       notify('customer', $o['customerEmail'], "Order $id picked up", "Your delivery partner has your order and is on the way.", 'orders.php');
     }
+    return;
+  }
+
+  // Completing the delivery.
+  $o = db_row("SELECT * FROM orders WHERE id = :id", [':id' => $id]);
+  db_exec("INSERT INTO completed_deliveries (id, customer, amount, earnings, time)
+           VALUES (:id, :c, :a, :e, :t)", [
+    ':id' => $d['id'], ':c' => $d['customer'], ':a' => (int) $d['amount'],
+    ':e'  => (int) round(((int) $d['amount']) * DELIVERY_PARTNER_RATE), ':t' => date('h:i A'),
+  ]);
+  db_exec("DELETE FROM deliveries WHERE id = :id", [':id' => $id]);
+  // Mark the order delivered and tell the customer (also settles payment as a fallback).
+  order_set_status($id, 'Delivered');
+
+  // Confirm the money to the store. For Cash on Delivery the partner has just
+  // collected the cash — record who/when and tell the vendor it was received.
+  $amount = (int) ($o['total'] ?? $d['amount']);
+  if ($o && order_is_prepaid($o)) {
+    notify_order_vendors($o, "Order $id delivered", "₹$amount was prepaid online — no cash to collect.", 'vendor.php?tab=payments');
   } else {
-    db_exec("INSERT INTO completed_deliveries (id, customer, amount, earnings, time)
-             VALUES (:id, :c, :a, :e, :t)", [
-      ':id' => $d['id'], ':c' => $d['customer'], ':a' => (int) $d['amount'],
-      ':e'  => (int) round(((int) $d['amount']) * DELIVERY_PARTNER_RATE), ':t' => date('h:i A'),
-    ]);
-    db_exec("DELETE FROM deliveries WHERE id = :id", [':id' => $id]);
-    // Mark the order delivered and tell the customer (also notifies via order_set_status).
-    order_set_status($id, 'Delivered');
+    $by = $collectedBy !== '' ? $collectedBy : (trim((string) ($o['deliveryPartner'] ?? '')) ?: 'Delivery partner');
+    payment_collect_cash($id, $by);
+    notify_order_vendors($o, "Payment received for $id", "₹$amount cash collected on delivery by $by.", 'vendor.php?tab=payments');
   }
 }
