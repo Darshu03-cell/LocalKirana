@@ -49,38 +49,60 @@ jobs:
             echo '];'
           } > includes/config.local.php
 
-      # TEMP DIAGNOSTIC: drop a uniquely-named marker into each candidate folder so we
-      # can tell (by probing the live URL) which one is the real document root.
-      # Removed once the correct server-dir is known.
-      - name: Probe FTP document root
-        env:
-          FS: ${{ secrets.FTP_SERVER }}
-          FU: ${{ secrets.FTP_USERNAME }}
-          FP: ${{ secrets.FTP_PASSWORD }}
+      # TEMP DIAGNOSTIC: use the (known-working) FTP action to drop a uniquely-named
+      # marker into each candidate folder. Whichever marker appears at the live URL
+      # reveals the true document root. Removed once server-dir is corrected.
+      - name: Build probe markers
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y lftp >/dev/null 2>&1
-          printf 'root\n' > m_root.txt
-          printf 'ph\n'   > m_ph.txt
-          printf 'phk\n'  > m_phk.txt
-          printf 'k\n'    > m_k.txt
-          printf 'dom\n'  > m_dom.txt
-          lftp -u "$FU","$FP" "$FS" <<'EOF'
-          set ftp:ssl-allow no
-          set net:max-retries 2
-          set net:timeout 20
-          set cmd:fail-exit no
-          put m_root.txt -o m_root.txt
-          mkdir -p public_html
-          put m_ph.txt -o public_html/m_ph.txt
-          mkdir -p public_html/kirana
-          put m_phk.txt -o public_html/kirana/m_phk.txt
-          mkdir -p kirana
-          put m_k.txt -o kirana/m_k.txt
-          mkdir -p domains/kirana.meriise.org/public_html
-          put m_dom.txt -o domains/kirana.meriise.org/public_html/m_dom.txt
-          bye
-          EOF
-          echo "Probe markers uploaded."
+          for d in pa pb pc pd; do mkdir -p "probe/$d"; done
+          echo phk > probe/pa/probe_phk.txt
+          echo dom > probe/pb/probe_dom.txt
+          echo ph  > probe/pc/probe_ph.txt
+          echo k   > probe/pd/probe_k.txt
+
+      - name: Probe public_html/kirana
+        continue-on-error: true
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: ./probe/pa/
+          server-dir: ./public_html/kirana/
+          state-name: .probe-pa.json
+
+      - name: Probe domains/kirana.meriise.org/public_html
+        continue-on-error: true
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: ./probe/pb/
+          server-dir: ./domains/kirana.meriise.org/public_html/
+          state-name: .probe-pb.json
+
+      - name: Probe public_html
+        continue-on-error: true
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: ./probe/pc/
+          server-dir: ./public_html/
+          state-name: .probe-pc.json
+
+      - name: Probe kirana
+        continue-on-error: true
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: ./probe/pd/
+          server-dir: ./kirana/
+          state-name: .probe-pd.json
 
       - name: Upload files to Hostinger via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
