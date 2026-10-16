@@ -388,6 +388,11 @@ function order_set_payment_status(string $id, string $status): void {
   db_exec("UPDATE orders SET paymentStatus = :s WHERE id = :id", [':s' => $status, ':id' => $id]);
 }
 
+/** Record the Razorpay payment reference against a prepaid order. */
+function order_set_payment_ref(string $id, string $ref): void {
+  db_exec("UPDATE orders SET paymentRef = :r WHERE id = :id", [':r' => $ref, ':id' => $id]);
+}
+
 /** Resolved payment status for an order (derives one for older rows). */
 function order_payment_status(array $o): string {
   $s = trim($o['paymentStatus'] ?? '');

@@ -69,6 +69,8 @@ function db_init(PDO $pdo): void {
   foreach (['discount INTEGER', 'offerCode TEXT', 'deliveryPartnerId INTEGER', 'deliveryPartner TEXT'] as $col) {
     try { $pdo->exec("ALTER TABLE orders ADD COLUMN $col"); } catch (Throwable $e) {}
   }
+  // Razorpay payment reference (the rzp payment id) for prepaid orders.
+  try { $pdo->exec("ALTER TABLE orders ADD COLUMN paymentRef TEXT"); } catch (Throwable $e) {}
   $pdo->exec("CREATE TABLE IF NOT EXISTS suppliers (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, contact TEXT, email TEXT, phone TEXT,
     productsSupplied INTEGER, totalVendors INTEGER, rating REAL, verified INTEGER

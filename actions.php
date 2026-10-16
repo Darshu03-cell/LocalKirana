@@ -58,10 +58,85 @@ switch ($do) {
       }
     }
 
+    $payable = max(0, $subtotal - $discount);
+
+    // Online (prepaid) payment goes through the Razorpay window — but ONLY when
+    // keys are configured and there is a non-zero amount to charge. We defer
+    // creating the order until payment is verified, so no unpaid phantom orders
+    // are ever recorded. Everything else (Cash on Delivery, or online when keys
+    // aren't set up yet) places the order immediately, exactly as before.
+    if (is_online_payment($payment) && razorpay_enabled() && $payable > 0) {
+      $rzp = razorpay_create_order($payable, 'rcpt_' . substr(bin2hex(random_bytes(6)), 0, 20), [
+        'customer' => $user['email'] ?? '',
+        'method'   => $payment,
+      ]);
+      if (!$rzp) {
+        set_flash('Could not start online payment right now. Please try again, or choose Cash on Delivery.', 'error');
+        header('Location: checkout.php');
+        exit;
+      }
+      // Stash the validated checkout context; the order is created on success.
+      $_SESSION['pending_order'] = [
+        'rzp_order_id'   => $rzp['id'],
+        'amount'         => $payable,
+        'payment'        => $payment,
+        'deliveryOption' => $deliveryOption,
+        'partner_id'     => (int) ($partner['id'] ?? 0),
+        'discount'       => $discount,
+        'offerCode'      => $offerCode,
+        'created_at'     => time(),
+      ];
+      header('Location: pay.php');
+      exit;
+    }
+
     $num = place_order($user, $payment, $deliveryOption, $discount, $offerCode, $partner);
     if ($num) {
       $savedMsg = $discount > 0 ? " You saved ₹$discount." : '';
       set_flash("Order $num confirmed! Payment: $payment. $deliveryOption.$savedMsg You can track it here.", 'success');
+      header('Location: orders.php');
+    } else {
+      set_flash('Your cart is empty.', 'error');
+      header('Location: cart.php');
+    }
+    exit;
+
+  case 'razorpay_verify':
+    // Razorpay redirects/posts back here after the customer pays. We verify the
+    // signature server-side (proof the payment is real) BEFORE creating the order.
+    if (!$user || ($user['role'] ?? '') !== 'customer') {
+      header('Location: login.php?role=customer');
+      exit;
+    }
+    $pending = $_SESSION['pending_order'] ?? null;
+    if (!$pending || empty($pending['rzp_order_id'])) {
+      set_flash('Your payment session expired. Please try again.', 'error');
+      header('Location: checkout.php');
+      exit;
+    }
+    $rzpOrderId   = (string) ($_POST['razorpay_order_id'] ?? '');
+    $rzpPaymentId = (string) ($_POST['razorpay_payment_id'] ?? '');
+    $rzpSignature = (string) ($_POST['razorpay_signature'] ?? '');
+
+    if ($rzpOrderId !== $pending['rzp_order_id']
+        || !razorpay_verify_signature($rzpOrderId, $rzpPaymentId, $rzpSignature)) {
+      unset($_SESSION['pending_order']);
+      set_flash('Payment could not be verified. You were not charged. Please try again.', 'error');
+      header('Location: checkout.php');
+      exit;
+    }
+
+    // Verified — create the order now, re-validating the delivery partner.
+    $partner = $pending['partner_id']
+      ? db_row("SELECT * FROM delivery_partners WHERE id = :id", [':id' => $pending['partner_id']])
+      : null;
+    $num = place_order($user, $pending['payment'], $pending['deliveryOption'],
+                       (int) $pending['discount'], (string) $pending['offerCode'], $partner);
+    unset($_SESSION['pending_order']);
+    if ($num) {
+      order_set_payment_ref($num, $rzpPaymentId);
+      $saved = (int) $pending['discount'] > 0 ? ' You saved ₹' . (int) $pending['discount'] . '.' : '';
+      set_flash("Payment successful! Order $num confirmed." . $saved . " You can track it here.", 'success');
       header('Location: orders.php');
     } else {
       set_flash('Your cart is empty.', 'error');

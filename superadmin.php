@@ -126,6 +126,9 @@ function so_order_detail_html(array $o, string $qs): string {
       <div class="border rounded-lg p-3">
         <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Payment</p>
         <p class="mb-2 flex items-center gap-1.5"><span class="text-xs border rounded-full px-2 py-0.5"><?= e($o['paymentMethod'] ?: 'Online') ?></span><?= so_pay_badge($ps) ?></p>
+        <?php if (!empty($o['paymentRef'])): ?>
+          <p class="mb-2 text-xs text-gray-500">Razorpay ref: <span class="font-mono text-gray-700"><?= e($o['paymentRef']) ?></span></p>
+        <?php endif; ?>
         <form method="post" action="actions.php">
           <input type="hidden" name="do" value="payment_status" />
           <input type="hidden" name="id" value="<?= e($o['id']) ?>" />

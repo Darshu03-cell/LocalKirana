@@ -3,11 +3,16 @@ name: Deploy to Hostinger (FTP)
 # Auto-deploys the site to Hostinger every time you push to `main`.
 # You can also run it by hand from the GitHub "Actions" tab (workflow_dispatch).
 #
-# ONE-TIME SETUP — add these three secrets in GitHub:
+# ONE-TIME SETUP — add these secrets in GitHub:
 #   Repo → Settings → Secrets and variables → Actions → "New repository secret"
-#     FTP_SERVER    = your FTP host   (Hostinger hPanel → Files → FTP Accounts, e.g. ftp.kirana.meriise.org or an IP)
-#     FTP_USERNAME  = your FTP user   (from the same FTP Accounts page)
-#     FTP_PASSWORD  = your FTP password
+#     FTP_SERVER           = your FTP host   (Hostinger hPanel → Files → FTP Accounts, e.g. ftp.kirana.meriise.org or an IP)
+#     FTP_USERNAME         = your FTP user   (from the same FTP Accounts page)
+#     FTP_PASSWORD         = your FTP password
+#   For online payments (optional until you're ready — Cash on Delivery works without them):
+#     RAZORPAY_KEY_ID      = your Razorpay Key ID     (rzp_test_... or rzp_live_...)
+#     RAZORPAY_KEY_SECRET  = your Razorpay Key Secret
+#   The secret key is written to includes/config.local.php on deploy and uploaded to
+#   the server, but is NEVER committed to git (so it stays out of the public repo).
 #
 # NOTE ON server-dir below:
 #   kirana.meriise.org is served from  public_html/kirana . The FTP account opens
@@ -25,6 +30,24 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # Write the Razorpay keys into a local config file (git-ignored) so they ship
+      # to the server without ever being committed. GitHub masks secret values in
+      # logs. If the secrets aren't set yet, empty keys are written and the site
+      # simply falls back to Cash on Delivery until you add them.
+      - name: Write Razorpay keys for production
+        env:
+          RZP_ID: ${{ secrets.RAZORPAY_KEY_ID }}
+          RZP_SECRET: ${{ secrets.RAZORPAY_KEY_SECRET }}
+        run: |
+          {
+            echo '<?php'
+            echo '// Generated at deploy time from GitHub Actions secrets. Do not edit by hand.'
+            echo 'return ['
+            echo "  'razorpay_key_id'     => '${RZP_ID}',"
+            echo "  'razorpay_key_secret' => '${RZP_SECRET}',"
+            echo '];'
+          } > includes/config.local.php
 
       - name: Upload files to Hostinger via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5

@@ -15,6 +15,11 @@ if (!profile_complete($user)) {
   exit;
 }
 
+// Returning from a cancelled/closed Razorpay window — reassure the customer.
+if (!empty($_GET['cancelled'])) {
+  set_flash('Payment cancelled — you have not been charged. Your cart is saved.', 'error');
+}
+
 $total   = cart_total_price();
 $address = format_address($user['address'] ?? '', $user['city'] ?? '', $user['pincode'] ?? '');
 
@@ -153,28 +158,22 @@ require __DIR__ . '/partials/head.php';
             <?php endforeach; ?>
           </div>
 
-          <!-- Conditional detail panels (demo only, not charged) -->
-          <div class="mt-4 space-y-4">
-            <div class="pay-panel hidden" data-method="UPI">
-              <label class="block text-sm font-medium mb-1">UPI ID</label>
-              <input name="upi_id" placeholder="yourname@upi" class="w-full border rounded-lg px-3 py-2" />
-            </div>
-            <div class="pay-panel hidden" data-method="Card">
-              <div class="grid grid-cols-2 gap-3">
-                <div class="col-span-2"><label class="block text-sm font-medium mb-1">Card number</label><input name="card_no" placeholder="1234 5678 9012 3456" maxlength="19" class="w-full border rounded-lg px-3 py-2" /></div>
-                <div><label class="block text-sm font-medium mb-1">Expiry</label><input name="card_exp" placeholder="MM/YY" maxlength="5" class="w-full border rounded-lg px-3 py-2" /></div>
-                <div><label class="block text-sm font-medium mb-1">CVV</label><input name="card_cvv" type="password" placeholder="•••" maxlength="4" class="w-full border rounded-lg px-3 py-2" /></div>
-              </div>
-            </div>
-            <div class="pay-panel hidden" data-method="Net Banking">
-              <label class="block text-sm font-medium mb-1">Select bank</label>
-              <select name="bank" class="w-full border rounded-lg px-3 py-2"><option>State Bank of India</option><option>HDFC Bank</option><option>ICICI Bank</option><option>Axis Bank</option><option>Kotak Mahindra</option><option>Punjab National Bank</option></select>
-            </div>
-            <div class="pay-panel hidden" data-method="Wallet">
-              <label class="block text-sm font-medium mb-1">Select wallet</label>
-              <select name="wallet" class="w-full border rounded-lg px-3 py-2"><option>Paytm</option><option>PhonePe</option><option>Amazon Pay</option><option>Mobikwik</option></select>
-            </div>
-            <p class="pay-panel hidden text-xs text-gray-500" data-method="Cash on Delivery">You'll pay ₹<?= e($total) ?> in cash when the order is delivered.</p>
+          <!-- Detail notes. Card / UPI / bank / wallet details are entered securely
+               inside the Razorpay window — we never collect or store them ourselves
+               (that keeps the site safe and PCI-compliant). -->
+          <div class="mt-4 space-y-3">
+            <?php if (razorpay_enabled()): ?>
+              <p class="pay-online-note hidden text-sm text-gray-600 flex items-start gap-2">
+                <i data-lucide="lock" class="w-4 h-4 mt-0.5 text-green-600 flex-shrink-0"></i>
+                <span>You'll complete this payment securely in the Razorpay window after you tap the button below. UPI, cards, net banking and wallets are all supported there.</span>
+              </p>
+            <?php else: ?>
+              <p class="pay-online-note hidden text-sm text-amber-600 flex items-start gap-2">
+                <i data-lucide="alert-circle" class="w-4 h-4 mt-0.5 flex-shrink-0"></i>
+                <span>Online payment isn't fully set up yet. You can still place this order now, or choose Cash on Delivery.</span>
+              </p>
+            <?php endif; ?>
+            <p class="pay-cod-note hidden text-xs text-gray-500">You'll pay ₹<?= e($total) ?> in cash when the order is delivered.</p>
           </div>
         </div>
       </div>
@@ -205,8 +204,12 @@ require __DIR__ . '/partials/head.php';
           <div id="discount-row" class="flex justify-between text-sm mt-1 hidden"><span class="text-gray-600">Offer discount</span><span class="text-green-600">− ₹<span id="discount-amt">0</span></span></div>
           <div class="flex justify-between text-sm mt-1"><span class="text-gray-600">Delivery</span><span class="text-green-600">Free</span></div>
           <div class="flex justify-between font-bold text-lg border-t mt-3 pt-3"><span>Total payable</span><span class="text-green-600">₹<span id="total-payable"><?= e($total) ?></span></span></div>
-          <button class="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg mt-5 font-medium">Place Order</button>
-          <p class="text-xs text-gray-400 text-center mt-3">Demo checkout — no real payment is processed.</p>
+          <button id="place-btn" class="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg mt-5 font-medium">Place Order</button>
+          <?php if (razorpay_enabled()): ?>
+            <p class="text-xs text-gray-400 text-center mt-3 flex items-center justify-center gap-1"><i data-lucide="lock" class="w-3 h-3"></i>Online payments are secured by Razorpay. Cash on Delivery also available.</p>
+          <?php else: ?>
+            <p class="text-xs text-gray-400 text-center mt-3">Cash on Delivery is ready to use. Online payment is being set up.</p>
+          <?php endif; ?>
         </div>
       </div>
     </form>
@@ -214,12 +217,38 @@ require __DIR__ . '/partials/head.php';
 </div>
 
 <script>
-  function syncPayPanels() {
+  var ONLINE_METHODS = ['UPI', 'Card', 'Net Banking', 'Wallet'];
+  var RZP_ENABLED = <?= razorpay_enabled() ? 'true' : 'false' ?>;
+
+  function currentMethod() {
     var sel = document.querySelector('.pay-radio:checked');
-    var method = sel ? sel.getAttribute('data-method') : '';
-    document.querySelectorAll('.pay-panel').forEach(function (p) {
-      p.classList.toggle('hidden', p.getAttribute('data-method') !== method);
-    });
+    return sel ? sel.getAttribute('data-method') : '';
+  }
+
+  function updatePlaceButton() {
+    var btn = document.getElementById('place-btn');
+    if (!btn) return;
+    var method = currentMethod();
+    var online = ONLINE_METHODS.indexOf(method) !== -1;
+    var t = document.getElementById('total-payable');
+    var amt = t ? t.textContent : '';
+    if (online && RZP_ENABLED) {
+      btn.textContent = 'Pay ₹' + amt + ' securely';
+    } else if (method === 'Cash on Delivery') {
+      btn.textContent = 'Place Order (Cash on Delivery)';
+    } else {
+      btn.textContent = 'Place Order';
+    }
+  }
+
+  function syncPayPanels() {
+    var method = currentMethod();
+    var online = ONLINE_METHODS.indexOf(method) !== -1;
+    var on  = document.querySelector('.pay-online-note');
+    var cod = document.querySelector('.pay-cod-note');
+    if (on)  on.classList.toggle('hidden', !online);
+    if (cod) cod.classList.toggle('hidden', method !== 'Cash on Delivery');
+    updatePlaceButton();
   }
   document.querySelectorAll('.pay-radio').forEach(function (r) { r.addEventListener('change', syncPayPanels); });
   syncPayPanels();
@@ -246,6 +275,7 @@ require __DIR__ . '/partials/head.php';
     if (row) row.classList.toggle('hidden', amt <= 0);
     var a = document.getElementById('discount-amt'); if (a) a.textContent = amt;
     var t = document.getElementById('total-payable'); if (t) t.textContent = (SUBTOTAL - amt);
+    updatePlaceButton();
   }
   document.querySelectorAll('.offer-radio').forEach(function (r) { r.addEventListener('change', syncOffer); });
   syncOffer();

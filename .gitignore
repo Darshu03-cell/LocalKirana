@@ -13,3 +13,7 @@ data/
 
 # Uploaded product images
 uploads/
+
+# Local secrets (Razorpay API keys, etc.) — NEVER commit these.
+# Copy includes/config.sample.php to includes/config.local.php and add your keys.
+includes/config.local.php
