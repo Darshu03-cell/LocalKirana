@@ -49,6 +49,39 @@ jobs:
             echo '];'
           } > includes/config.local.php
 
+      # TEMP DIAGNOSTIC: drop a uniquely-named marker into each candidate folder so we
+      # can tell (by probing the live URL) which one is the real document root.
+      # Removed once the correct server-dir is known.
+      - name: Probe FTP document root
+        env:
+          FS: ${{ secrets.FTP_SERVER }}
+          FU: ${{ secrets.FTP_USERNAME }}
+          FP: ${{ secrets.FTP_PASSWORD }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y lftp >/dev/null 2>&1
+          printf 'root\n' > m_root.txt
+          printf 'ph\n'   > m_ph.txt
+          printf 'phk\n'  > m_phk.txt
+          printf 'k\n'    > m_k.txt
+          printf 'dom\n'  > m_dom.txt
+          lftp -u "$FU","$FP" "$FS" <<'EOF'
+          set ftp:ssl-allow no
+          set net:max-retries 2
+          set net:timeout 20
+          set cmd:fail-exit no
+          put m_root.txt -o m_root.txt
+          mkdir -p public_html
+          put m_ph.txt -o public_html/m_ph.txt
+          mkdir -p public_html/kirana
+          put m_phk.txt -o public_html/kirana/m_phk.txt
+          mkdir -p kirana
+          put m_k.txt -o kirana/m_k.txt
+          mkdir -p domains/kirana.meriise.org/public_html
+          put m_dom.txt -o domains/kirana.meriise.org/public_html/m_dom.txt
+          bye
+          EOF
+          echo "Probe markers uploaded."
+
       - name: Upload files to Hostinger via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
