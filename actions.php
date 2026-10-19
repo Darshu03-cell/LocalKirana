@@ -24,9 +24,11 @@ switch ($do) {
     $payment = in_array($_POST['payment'] ?? '', $allowed, true) ? $_POST['payment'] : 'Cash on Delivery';
 
     $deliveryOption = trim((string) ($_POST['delivery_option'] ?? ''));
-    if (!in_array($deliveryOption, ['Self Pickup', 'Home Delivery'], true)) {
+    if (!in_array($deliveryOption, ['Self Pickup', 'Home Delivery', 'Centralized Pickup'], true)) {
       $deliveryOption = 'Self Pickup';
     }
+    // Centralized Pickup carries a flat handling fee (set by the admin).
+    $pickupFee = $deliveryOption === 'Centralized Pickup' ? (int) pickup_center()['fee'] : 0;
 
     // Home Delivery must name a real, active delivery partner.
     $partner = null;
@@ -58,7 +60,7 @@ switch ($do) {
       }
     }
 
-    $payable = max(0, $subtotal - $discount);
+    $payable = max(0, $subtotal - $discount) + $pickupFee;
 
     // Online (prepaid) payment goes through the Razorpay window — but ONLY when
     // keys are configured and there is a non-zero amount to charge. We defer
@@ -84,13 +86,14 @@ switch ($do) {
         'partner_id'     => (int) ($partner['id'] ?? 0),
         'discount'       => $discount,
         'offerCode'      => $offerCode,
+        'pickupFee'      => $pickupFee,
         'created_at'     => time(),
       ];
       header('Location: pay.php');
       exit;
     }
 
-    $num = place_order($user, $payment, $deliveryOption, $discount, $offerCode, $partner);
+    $num = place_order($user, $payment, $deliveryOption, $discount, $offerCode, $partner, $pickupFee);
     if ($num) {
       $savedMsg = $discount > 0 ? " You saved ₹$discount." : '';
       set_flash("Order $num confirmed! Payment: $payment. $deliveryOption.$savedMsg You can track it here.", 'success');
@@ -131,7 +134,7 @@ switch ($do) {
       ? db_row("SELECT * FROM delivery_partners WHERE id = :id", [':id' => $pending['partner_id']])
       : null;
     $num = place_order($user, $pending['payment'], $pending['deliveryOption'],
-                       (int) $pending['discount'], (string) $pending['offerCode'], $partner);
+                       (int) $pending['discount'], (string) $pending['offerCode'], $partner, (int) ($pending['pickupFee'] ?? 0));
     unset($_SESSION['pending_order']);
     if ($num) {
       order_set_payment_ref($num, $rzpPaymentId);
@@ -347,6 +350,17 @@ switch ($do) {
     header('Location: ' . safe_redirect('admin.php?tab=setup'));
     exit;
 
+  case 'pickup_center_save':
+    if (!$user || ($user['role'] ?? '') !== 'admin') { header('Location: login.php'); exit; }
+    shop_settings_save([
+      'pickupCenterName'    => trim($_POST['pickupCenterName'] ?? ''),
+      'pickupCenterAddress' => trim($_POST['pickupCenterAddress'] ?? ''),
+      'pickupCenterFee'     => (string) max(0, (int) ($_POST['pickupCenterFee'] ?? 0)),
+    ]);
+    set_flash('Collection centre saved.');
+    header('Location: ' . safe_redirect('admin.php?tab=setup'));
+    exit;
+
   case 'admin_product_add':
     if (!$user || ($user['role'] ?? '') !== 'admin') { header('Location: login.php'); exit; }
     $data = $_POST; // vendor comes from the selected vendor in the form
@@ -439,6 +453,41 @@ switch ($do) {
       set_flash('Delivery ' . ($_POST['id'] ?? '') . ' updated.');
     }
     header('Location: ' . safe_redirect('delivery.php'));
+    exit;
+
+  /* --------------------------- centralized pickup -------------------------- */
+  case 'pickup_ready':
+    // A shop confirms its items are ready at the collection centre.
+    if (!$user || ($user['role'] ?? '') !== 'vendor') { header('Location: login.php'); exit; }
+    $oid  = $_POST['id'] ?? '';
+    $shop = $user['shopName'] ?? '';
+    $o = db_row("SELECT * FROM orders WHERE id = :id", [':id' => $oid]);
+    if ($o && ($o['deliveryOption'] ?? '') === 'Centralized Pickup' && $shop !== '' && in_array($shop, pickup_shops_for_order($oid), true)) {
+      pickup_mark_ready($oid, $shop);
+      set_flash('Marked ready for the collection centre.');
+    } else {
+      set_flash('Could not update readiness for this order.', 'error');
+    }
+    header('Location: ' . safe_redirect('vendor.php?tab=orders'));
+    exit;
+
+  case 'pickup_collected':
+    // The customer confirms they have collected their complete order.
+    if (!$user || ($user['role'] ?? '') !== 'customer') { header('Location: login.php'); exit; }
+    $oid = $_POST['id'] ?? '';
+    $o = db_row("SELECT * FROM orders WHERE id = :id", [':id' => $oid]);
+    if ($o && strtolower($o['customerEmail'] ?? '') === strtolower($user['email'] ?? '')
+        && ($o['deliveryOption'] ?? '') === 'Centralized Pickup'
+        && !in_array($o['status'] ?? '', ['Delivered', 'Cancelled'], true)
+        && pickup_all_ready($oid)) {
+      order_set_status($oid, 'Delivered');              // marks the order done + settles payment
+      if (!order_is_prepaid($o)) payment_collect_cash($oid, pickup_center()['name']); // COD paid at the centre
+      notify_order_vendors($o, "Order $oid collected", 'The customer collected their order from ' . pickup_center()['name'] . '.', 'vendor.php?tab=payments');
+      set_flash('Thanks! Your order is marked as collected.');
+    } else {
+      set_flash('This order is not ready to collect yet.', 'error');
+    }
+    header('Location: ' . safe_redirect('orders.php'));
     exit;
 
   default:

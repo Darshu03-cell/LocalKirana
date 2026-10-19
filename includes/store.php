@@ -30,6 +30,23 @@ function brand_tagline(): string {
   return $t !== '' ? $t : 'Order groceries from your neighborhood stores.';
 }
 
+/** The Centralized Pickup collection point (admin-configured in Shop Setup).
+ *  name/address describe where to collect; fee is a flat handling charge (₹). */
+function pickup_center(): array {
+  $s = shop_settings();
+  $name = trim($s['pickupCenterName'] ?? '');
+  return [
+    'name'    => $name !== '' ? $name : 'LocalKirana Collection Center',
+    'address' => trim($s['pickupCenterAddress'] ?? ''),
+    'fee'     => max(0, (int) ($s['pickupCenterFee'] ?? 0)),
+  ];
+}
+
+/** A one-line label for a collection point, e.g. "Center Name — Address". */
+function pickup_center_label(array $c): string {
+  return trim($c['name'] . ($c['address'] !== '' ? ' — ' . $c['address'] : ''));
+}
+
 /* --------------------------------- getters --------------------------------- */
 function products(): array             { return db_all("SELECT * FROM products ORDER BY id"); }
 function offers(): array               { return db_all("SELECT * FROM offers ORDER BY id DESC"); }
@@ -411,8 +428,10 @@ function order_set_payment_ref(string $id, string $ref): void {
  *  the customer receipt popup and the customer/vendor/admin payment history.
  *  Captures the money split (vendor share vs platform/admin commission). */
 function payment_record(string $orderId, string $customerEmail, string $customerName, string $vendor,
-                        int $amount, string $method, string $status, string $ref = ''): void {
-  $eco = order_economics(max(0, $amount));
+                        int $amount, string $method, string $status, string $ref = '', ?int $goodsValue = null): void {
+  // The commission / vendor split is on the goods value (which excludes any
+  // Centralized Pickup handling fee); $amount is the grand total actually charged.
+  $eco = order_economics(max(0, $goodsValue ?? $amount));
   db_exec("INSERT INTO payments (orderId, customerEmail, customerName, vendor, amount, method, status, ref, commission, vendorNet, created_at)
            VALUES (:oid, :ce, :cn, :v, :amt, :m, :st, :ref, :comm, :vnet, :ts)", [
     ':oid'  => $orderId,
@@ -484,14 +503,71 @@ function order_is_prepaid(array $o): bool {
   return ($o['paymentMethod'] ?? '') !== 'Cash on Delivery' && ($o['paymentMethod'] ?? '') !== '';
 }
 
+/** Grand total actually charged: the goods total plus any pickup handling fee. */
+function order_grand_total(array $o): int {
+  return (int) ($o['total'] ?? 0) + (int) ($o['pickupFee'] ?? 0);
+}
+
+/* --------------------------- centralized pickup ---------------------------- */
+
+/** Distinct shops that have items in an order (the stores that must prepare). */
+function pickup_shops_for_order(string $orderId): array {
+  return array_values(array_unique(array_filter(array_map(
+    fn($r) => trim((string) ($r['vendor'] ?? '')),
+    order_items($orderId)
+  ))));
+}
+
+/** Shops that have marked their items ready for the collection centre. */
+function pickup_ready_shops(string $orderId): array {
+  return array_map(fn($r) => $r['vendor'], db_all("SELECT vendor FROM pickup_readiness WHERE orderId = :id", [':id' => $orderId]));
+}
+
+/** Has this shop marked its part of the order ready? */
+function pickup_is_shop_ready(string $orderId, string $vendor): bool {
+  return in_array(trim($vendor), pickup_ready_shops($orderId), true);
+}
+
+/** Readiness progress: ['ready'=>x, 'total'=>y, 'shops'=>[], 'readyShops'=>[]]. */
+function pickup_progress(string $orderId): array {
+  $shops = pickup_shops_for_order($orderId);
+  $ready = array_values(array_intersect($shops, pickup_ready_shops($orderId)));
+  return ['ready' => count($ready), 'total' => count($shops), 'shops' => $shops, 'readyShops' => $ready];
+}
+
+/** Are all shops in the order ready (and there is at least one)? */
+function pickup_all_ready(string $orderId): bool {
+  $p = pickup_progress($orderId);
+  return $p['total'] > 0 && $p['ready'] >= $p['total'];
+}
+
+/** A shop confirms its items are ready at the collection centre. When every shop
+ *  in the order is ready, the customer (and the centre/admin) are notified. */
+function pickup_mark_ready(string $orderId, string $vendor): void {
+  $vendor = trim($vendor);
+  if ($orderId === '' || $vendor === '') return;
+  db_exec("INSERT OR IGNORE INTO pickup_readiness (orderId, vendor, ready_at) VALUES (:id, :v, :ts)",
+    [':id' => $orderId, ':v' => $vendor, ':ts' => date('Y-m-d H:i:s')]);
+  if (pickup_all_ready($orderId)) {
+    $o = db_row("SELECT * FROM orders WHERE id = :id", [':id' => $orderId]);
+    $centre = pickup_center()['name'];
+    if ($o && !empty($o['customerEmail'])) {
+      notify('customer', $o['customerEmail'], "Order $orderId is ready for pickup",
+             "All items are ready at $centre. Collect your complete order anytime.", 'orders.php');
+    }
+    notify('admin', '', "Pickup order $orderId fully ready", "All shops have delivered to $centre.", 'admin.php');
+  }
+}
+
 /**
  * Create an order from the current cart, then empty the cart.
  * $discount   – rupee discount already validated by the caller (from an offer).
  * $offerCode  – the code/label of the applied offer (for the record).
  * $partner    – delivery_partners row when the customer chose Home Delivery.
+ * $pickupFee  – flat handling fee (₹) added on top for Centralized Pickup orders.
  */
 function place_order(?array $user = null, string $payment = 'Cash on Delivery', string $deliveryOption = 'Self Pickup',
-                     int $discount = 0, string $offerCode = '', ?array $partner = null): string {
+                     int $discount = 0, string $offerCode = '', ?array $partner = null, int $pickupFee = 0): string {
   $items = cart_items();
   if (!$items) return '';
   $max = (int) (db_row("SELECT MAX(CAST(SUBSTR(id, 5) AS INTEGER)) AS m FROM orders")['m'] ?? 0);
@@ -509,14 +585,21 @@ function place_order(?array $user = null, string $payment = 'Cash on Delivery', 
   $addr = format_address($user['address'] ?? '', $user['city'] ?? '', $user['pincode'] ?? '');
   // Prepaid methods are Paid at checkout; Cash on Delivery is Unpaid until collected.
   $payStatus = ($payment === 'Cash on Delivery') ? 'Unpaid' : 'Paid';
-  $deliveryOption = in_array($deliveryOption, ['Self Pickup', 'Home Delivery'], true) ? $deliveryOption : 'Self Pickup';
+  $deliveryOption = in_array($deliveryOption, ['Self Pickup', 'Home Delivery', 'Centralized Pickup'], true) ? $deliveryOption : 'Self Pickup';
+
+  // Centralized Pickup: a flat handling fee on top, and a snapshot of the centre
+  // so the customer always sees where to collect (even if settings change later).
+  $isCentralized  = $deliveryOption === 'Centralized Pickup';
+  $pickupFee      = $isCentralized ? max(0, $pickupFee) : 0;
+  $pickupLocation = $isCentralized ? pickup_center_label(pickup_center()) : '';
 
   $subtotal = cart_total_price();
   $discount = max(0, min($discount, $subtotal));
-  $total    = $subtotal - $discount;
+  $total    = $subtotal - $discount;   // goods value (the fee is tracked separately)
+  $grand    = $total + $pickupFee;      // amount actually charged
 
-  db_exec("INSERT INTO orders (id, customerId, customerName, customerEmail, vendor, vendorId, items, total, status, date, paymentMethod, paymentStatus, deliveryAddress, deliveryOption, discount, offerCode, deliveryPartnerId, deliveryPartner)
-           VALUES (:id, :cid, :cn, :cemail, :v, :vid, :items, :total, 'Pending', :date, :pay, :pstatus, :addr, :dopt, :disc, :ocode, :pid, :pname)", [
+  db_exec("INSERT INTO orders (id, customerId, customerName, customerEmail, vendor, vendorId, items, total, status, date, paymentMethod, paymentStatus, deliveryAddress, deliveryOption, discount, offerCode, deliveryPartnerId, deliveryPartner, pickupFee, pickupLocation)
+           VALUES (:id, :cid, :cn, :cemail, :v, :vid, :items, :total, 'Pending', :date, :pay, :pstatus, :addr, :dopt, :disc, :ocode, :pid, :pname, :pfee, :ploc)", [
     ':id'        => $num,
     ':cid'       => $user['id'] ?? 0,
     ':cn'        => $user['name'] ?? 'Guest',
@@ -534,6 +617,8 @@ function place_order(?array $user = null, string $payment = 'Cash on Delivery', 
     ':ocode'     => $offerCode,
     ':pid'       => $partner['id'] ?? 0,
     ':pname'     => $partner['name'] ?? '',
+    ':pfee'      => $pickupFee,
+    ':ploc'      => $pickupLocation,
   ]);
   // Save the actual products in this order.
   foreach ($items as $it) {
@@ -562,9 +647,10 @@ function place_order(?array $user = null, string $payment = 'Cash on Delivery', 
   }
 
   // Record the payment in the history. Prepaid is Paid now; Cash on Delivery is
-  // Pending until it's collected on delivery (see order_set_status('Delivered')).
+  // Pending until collected. The charged amount is the grand total (incl. the
+  // pickup fee); the vendor/commission split stays on the goods value.
   payment_record($num, $user['email'] ?? '', $user['name'] ?? 'Guest', $vendorName ?: 'Local store',
-                 (int) $total, $payment, $payStatus === 'Paid' ? 'Paid' : 'Pending');
+                 (int) $grand, $payment, $payStatus === 'Paid' ? 'Paid' : 'Pending', '', (int) $total);
 
   // ---- Notifications to everyone involved ----
   $cust = $user['email'] ?? '';
@@ -579,6 +665,11 @@ function place_order(?array $user = null, string $payment = 'Cash on Delivery', 
   notify('superadmin', '', "New order $num", "₹$total · payment: $payment", 'superadmin.php?tab=orders');
   if ($deliveryOption === 'Home Delivery' && $partner && !empty($partner['email'])) {
     notify('delivery', $partner['email'], "New delivery assigned: $num", "Deliver to " . ($user['name'] ?? 'customer') . ($addr ? " · $addr" : ''), 'delivery.php?tab=active');
+  }
+  if ($isCentralized) {
+    $shopCount = count($storeNames);
+    notify('customer', $cust, "Collect order $num at the centre", "We'll let you know when all " . ($shopCount > 1 ? "$shopCount shops have" : 'items are') . " ready at " . pickup_center()['name'] . ".", 'orders.php');
+    notify('admin', '', "Centralized pickup order $num", "Organise " . ($shopCount > 1 ? "$shopCount shops" : 'this order') . " at " . pickup_center()['name'] . " for " . ($user['name'] ?? 'a customer') . ".", 'admin.php');
   }
 
   cart_clear();

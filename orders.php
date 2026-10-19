@@ -135,16 +135,38 @@ require __DIR__ . '/partials/head.php';
                 <p class="text-xs text-gray-500 mt-1">Placed on <?= e($o['date']) ?> · <?= e($o['vendor'] ?: 'Local store') ?></p>
               </div>
               <div class="text-right">
-                <p class="text-2xl font-bold text-green-600">₹<?= e($o['total']) ?></p>
-                <p class="text-xs text-gray-500"><?= e($o['items']) ?> item<?= (int)$o['items'] === 1 ? '' : 's' ?> · <?= e($o['paymentMethod']) ?></p>
+                <p class="text-2xl font-bold text-green-600">₹<?= e(order_grand_total($o)) ?></p>
+                <p class="text-xs text-gray-500"><?= e($o['items']) ?> item<?= (int)$o['items'] === 1 ? '' : 's' ?> · <?= e($o['paymentMethod']) ?><?php if ((int) ($o['pickupFee'] ?? 0) > 0): ?> · incl. ₹<?= (int) $o['pickupFee'] ?> handling<?php endif; ?></p>
                 <?php if ((int) ($o['discount'] ?? 0) > 0): ?><p class="text-xs font-medium text-green-600 mt-0.5">You saved ₹<?= (int) $o['discount'] ?><?= !empty($o['offerCode']) ? ' · ' . e($o['offerCode']) : '' ?></p><?php endif; ?>
-                <?php if (!empty($o['deliveryOption'])): ?><p class="text-xs text-gray-500 mt-0.5 inline-flex items-center gap-1"><i data-lucide="<?= $o['deliveryOption'] === 'Home Delivery' ? 'truck' : 'shopping-bag' ?>" class="w-3.5 h-3.5"></i><?= e($o['deliveryOption']) ?><?= !empty($o['deliveryPartner']) ? ' · ' . e($o['deliveryPartner']) : '' ?></p><?php endif; ?>
+                <?php if (!empty($o['deliveryOption'])): ?><p class="text-xs text-gray-500 mt-0.5 inline-flex items-center gap-1"><i data-lucide="<?= $o['deliveryOption'] === 'Home Delivery' ? 'truck' : ($o['deliveryOption'] === 'Centralized Pickup' ? 'building-2' : 'shopping-bag') ?>" class="w-3.5 h-3.5"></i><?= e($o['deliveryOption']) ?><?= !empty($o['deliveryPartner']) ? ' · ' . e($o['deliveryPartner']) : '' ?></p><?php endif; ?>
               </div>
             </div>
 
             <div class="px-6 py-6">
               <?php if ($o['status'] === 'Cancelled'): ?>
                 <div class="flex items-center gap-2 text-red-600 text-sm font-medium"><i data-lucide="x-circle" class="w-5 h-5"></i>This order was cancelled.</div>
+              <?php elseif (($o['deliveryOption'] ?? '') === 'Centralized Pickup'): ?>
+                <?php
+                  // Pickup-specific progress: placed → shops preparing → ready at centre → collected.
+                  $pp        = pickup_progress($o['id']);
+                  $allReady  = $pp['total'] > 0 && $pp['ready'] >= $pp['total'];
+                  $collected = $o['status'] === 'Delivered';
+                  $pickActive = $collected ? 3 : ($allReady ? 2 : ($pp['ready'] > 0 ? 1 : 0));
+                  $pickSteps  = ['Order placed', 'Shops preparing', 'Ready at centre', 'Collected'];
+                ?>
+                <div class="flex items-center">
+                  <?php foreach ($pickSteps as $i => $step): $done = $i <= $pickActive; ?>
+                    <div class="flex flex-col items-center flex-shrink-0" style="min-width:76px">
+                      <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold <?= $done ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-500' ?>">
+                        <?php if ($done): ?><i data-lucide="check" class="w-4 h-4"></i><?php else: ?><?= $i + 1 ?><?php endif; ?>
+                      </div>
+                      <span class="text-[11px] mt-1 text-center <?= $done ? 'text-green-700 font-medium' : 'text-gray-400' ?>"><?= e($step) ?><?php if ($i === 1 && $pp['total'] > 0 && !$allReady): ?><br><span class="text-[10px] text-gray-400"><?= $pp['ready'] ?>/<?= $pp['total'] ?> ready</span><?php endif; ?></span>
+                    </div>
+                    <?php if ($i < count($pickSteps) - 1): ?>
+                      <div class="flex-1 h-1 rounded <?= $i < $pickActive ? 'bg-green-600' : 'bg-gray-200' ?>"></div>
+                    <?php endif; ?>
+                  <?php endforeach; ?>
+                </div>
               <?php else: ?>
                 <!-- Status tracker -->
                 <div class="flex items-center">
@@ -210,6 +232,53 @@ require __DIR__ . '/partials/head.php';
                 </div>
               <?php endif; ?>
 
+              <?php
+                // Centralized Pickup: where to collect + per-shop readiness + collect button.
+                if (($o['deliveryOption'] ?? '') === 'Centralized Pickup' && $o['status'] !== 'Cancelled'):
+                  $pp        = pickup_progress($o['id']);
+                  $allReady  = $pp['total'] > 0 && $pp['ready'] >= $pp['total'];
+                  $collected = $o['status'] === 'Delivered';
+                  $centerLoc = $o['pickupLocation'] ?: pickup_center_label(pickup_center());
+              ?>
+                <div class="mt-6 border-t pt-4">
+                  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <p class="text-sm font-semibold text-gray-700 flex items-center gap-2"><i data-lucide="building-2" class="w-4 h-4 text-green-600"></i>Centralized pickup</p>
+                    <?php if ($collected): ?>
+                      <span class="inline-flex items-center gap-1.5 text-xs font-medium text-green-700 bg-green-100 rounded-full px-2.5 py-1"><i data-lucide="check-circle" class="w-3.5 h-3.5"></i>Collected</span>
+                    <?php elseif ($allReady): ?>
+                      <span class="inline-flex items-center gap-1.5 text-xs font-medium text-green-700 bg-green-100 rounded-full px-2.5 py-1"><span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-green-600"></span></span>Ready to collect</span>
+                    <?php else: ?>
+                      <span class="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700 bg-amber-100 rounded-full px-2.5 py-1"><i data-lucide="clock" class="w-3.5 h-3.5"></i><?= $pp['ready'] ?> of <?= $pp['total'] ?: 1 ?> shops ready</span>
+                    <?php endif; ?>
+                  </div>
+                  <div class="rounded-lg border bg-gray-50 p-4">
+                    <p class="text-sm font-medium text-gray-700 flex items-center gap-2"><i data-lucide="map-pin" class="w-4 h-4 text-green-600"></i>Collect your complete order from</p>
+                    <p class="text-sm text-gray-700 mt-1"><?= e($centerLoc) ?></p>
+                    <?php if ($pp['total'] > 0): ?>
+                      <div class="mt-3 space-y-1.5">
+                        <?php foreach ($pp['shops'] as $sh): $r = in_array($sh, $pp['readyShops'], true); ?>
+                          <div class="flex items-center justify-between text-xs">
+                            <span class="text-gray-600 inline-flex items-center gap-1.5"><i data-lucide="store" class="w-3.5 h-3.5"></i><?= e($sh) ?></span>
+                            <?php if ($r): ?><span class="text-green-700 font-medium inline-flex items-center gap-1"><i data-lucide="check" class="w-3.5 h-3.5"></i>Ready at centre</span><?php else: ?><span class="text-amber-600">Preparing…</span><?php endif; ?>
+                          </div>
+                        <?php endforeach; ?>
+                      </div>
+                    <?php endif; ?>
+                    <?php if ($allReady && !$collected): ?>
+                      <div class="mt-4 rounded-lg bg-green-50 border border-green-200 p-3">
+                        <p class="text-sm text-green-800 font-medium flex items-center gap-1.5"><i data-lucide="party-popper" class="w-4 h-4"></i>Your complete order is ready!</p>
+                        <p class="text-xs text-green-700 mt-0.5"><?= order_is_prepaid($o) ? 'Just show your order number at the centre.' : 'Pay ₹' . order_grand_total($o) . ' in cash at the centre when you collect.' ?></p>
+                        <form method="post" action="actions.php" class="mt-3" data-confirm="Confirm you have collected your complete order?">
+                          <input type="hidden" name="do" value="pickup_collected" />
+                          <input type="hidden" name="id" value="<?= e($o['id']) ?>" />
+                          <button class="bg-green-600 hover:bg-green-700 text-white text-sm px-4 py-2 rounded-lg inline-flex items-center gap-1.5"><i data-lucide="package-check" class="w-4 h-4"></i>I've collected my order</button>
+                        </form>
+                      </div>
+                    <?php endif; ?>
+                  </div>
+                </div>
+              <?php endif; ?>
+
               <?php $lines = order_items($o['id']); if ($lines): ?>
                 <div class="mt-6 border-t pt-4">
                   <p class="text-xs font-medium text-gray-500 mb-2">Items</p>
@@ -220,6 +289,10 @@ require __DIR__ . '/partials/head.php';
                         <span>₹<?= e($li['price'] * $li['quantity']) ?></span>
                       </div>
                     <?php endforeach; ?>
+                    <?php if ((int) ($o['pickupFee'] ?? 0) > 0): ?>
+                      <div class="flex justify-between text-sm pt-1 mt-1 border-t"><span class="text-gray-500">Collection handling</span><span>₹<?= (int) $o['pickupFee'] ?></span></div>
+                      <div class="flex justify-between text-sm font-semibold"><span>Total</span><span>₹<?= order_grand_total($o) ?></span></div>
+                    <?php endif; ?>
                   </div>
                 </div>
               <?php endif; ?>
@@ -227,7 +300,7 @@ require __DIR__ . '/partials/head.php';
               <div class="flex items-center justify-between mt-6 flex-wrap gap-3">
                 <?php $addr = order_delivery_address($o); ?>
                 <div class="flex items-start gap-2 text-sm text-gray-600">
-                  <?php if ($addr !== ''): ?><i data-lucide="map-pin" class="w-4 h-4 mt-0.5 flex-shrink-0"></i><span>Delivering to: <?= e($addr) ?></span><?php endif; ?>
+                  <?php if ($addr !== '' && ($o['deliveryOption'] ?? '') !== 'Centralized Pickup'): ?><i data-lucide="map-pin" class="w-4 h-4 mt-0.5 flex-shrink-0"></i><span><?= ($o['deliveryOption'] ?? '') === 'Home Delivery' ? 'Delivering to' : 'Delivery address' ?>: <?= e($addr) ?></span><?php endif; ?>
                 </div>
                 <?php if ($o['status'] === 'Pending'): ?>
                   <form method="post" action="actions.php" data-confirm="Cancel order <?= e($o['id']) ?>?">
@@ -306,7 +379,8 @@ require __DIR__ . '/partials/head.php';
       <div class="p-6 space-y-4">
         <div class="text-center">
           <p class="text-sm text-gray-500">Amount <?= $paidStatus === 'Paid' ? 'paid' : 'payable' ?></p>
-          <p class="text-4xl font-bold text-gray-900">₹<?= e($paidOrder['total']) ?></p>
+          <p class="text-4xl font-bold text-gray-900">₹<?= e(order_grand_total($paidOrder)) ?></p>
+          <?php if ((int) ($paidOrder['pickupFee'] ?? 0) > 0): ?><p class="text-xs text-gray-500 mt-0.5">Goods ₹<?= e($paidOrder['total']) ?> + ₹<?= (int) $paidOrder['pickupFee'] ?> collection handling</p><?php endif; ?>
           <div class="mt-2 flex items-center justify-center gap-2 text-sm text-gray-600">
             <span class="inline-flex items-center gap-1"><i data-lucide="store" class="w-4 h-4"></i><?= e($paidOrder['vendor'] ?: 'Local store') ?></span>
             <span>·</span>
@@ -325,6 +399,12 @@ require __DIR__ . '/partials/head.php';
             <span class="inline-flex items-center gap-2 text-gray-600"><span class="inline-block w-2.5 h-2.5 rounded-full bg-purple-600"></span>Platform &amp; admin</span>
             <span class="font-semibold">₹<?= e($paidEco['commission']) ?></span>
           </div>
+          <?php if ((int) ($paidOrder['pickupFee'] ?? 0) > 0): ?>
+          <div class="flex items-center justify-between px-4 py-2.5 text-sm">
+            <span class="inline-flex items-center gap-2 text-gray-600"><span class="inline-block w-2.5 h-2.5 rounded-full bg-amber-500"></span>Collection handling</span>
+            <span class="font-semibold">₹<?= (int) $paidOrder['pickupFee'] ?></span>
+          </div>
+          <?php endif; ?>
         </div>
 
         <p class="text-xs text-gray-500 flex items-start gap-1.5">

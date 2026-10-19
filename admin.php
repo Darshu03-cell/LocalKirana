@@ -257,6 +257,19 @@ render_dashboard_start($shell);
       </form>
     </div>
 
+    <!-- 1b. Centralized pickup collection centre -->
+    <div class="bg-white rounded-xl border p-6">
+      <div class="flex items-center gap-2 mb-1"><i data-lucide="building-2" class="w-5 h-5 text-green-600"></i><h3 class="font-bold text-lg">Centralized Pickup Centre</h3></div>
+      <p class="text-sm text-gray-500 mb-4">One location where a multi-shop order is gathered so the customer collects everything in one place. Leave the fee at 0 for free collection.</p>
+      <form method="post" action="actions.php" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <input type="hidden" name="do" value="pickup_center_save" />
+        <div><label class="block text-sm font-medium mb-1">Centre Name</label><input name="pickupCenterName" value="<?= e($settings['pickupCenterName'] ?? '') ?>" placeholder="e.g. LocalKirana Collection Centre" class="w-full border rounded-lg px-3 py-2" /></div>
+        <div><label class="block text-sm font-medium mb-1">Handling Fee (₹)</label><input name="pickupCenterFee" type="number" min="0" value="<?= e((int) ($settings['pickupCenterFee'] ?? 0)) ?>" class="w-full border rounded-lg px-3 py-2" /></div>
+        <div class="md:col-span-2"><label class="block text-sm font-medium mb-1">Centre Address</label><input name="pickupCenterAddress" value="<?= e($settings['pickupCenterAddress'] ?? '') ?>" placeholder="e.g. Shop 3, Main Road, Hassan - 573201" class="w-full border rounded-lg px-3 py-2" /></div>
+        <div class="md:col-span-2"><button class="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-lg">Save Collection Centre</button></div>
+      </form>
+    </div>
+
     <!-- 2. Quick add vendor -->
     <div class="bg-white rounded-xl border p-6">
       <div class="flex items-center gap-2 mb-1"><i data-lucide="user-plus" class="w-5 h-5 text-green-600"></i><h3 class="font-bold text-lg">Add a Vendor</h3></div>

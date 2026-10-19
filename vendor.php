@@ -293,7 +293,7 @@ render_dashboard_start($shell);
           <tbody>
             <?php foreach ($shownOrders as $o): ?>
               <tr class="border-b last:border-0">
-                <td class="py-3 pr-4 font-medium"><?= e($o['id']) ?><?php if (!empty($o['multiStore'])): ?><br><span class="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">Multi-store · your items</span><?php endif; ?></td>
+                <td class="py-3 pr-4 font-medium"><?= e($o['id']) ?><?php if (!empty($o['multiStore'])): ?><br><span class="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">Multi-store · your items</span><?php endif; ?><?php if (($o['deliveryOption'] ?? '') === 'Centralized Pickup'): ?><br><span class="text-[10px] font-medium text-green-700 bg-green-50 px-1.5 py-0.5 rounded-full">Centralized pickup</span><?php endif; ?></td>
                 <td class="py-3 pr-4"><?= e($o['customerName']) ?></td>
                 <td class="py-3 pr-4 max-w-xs truncate"><?= e(order_delivery_address($o) ?: '—') ?></td>
                 <td class="py-3 pr-4"><?= e($o['items']) ?> items</td>
@@ -301,6 +301,17 @@ render_dashboard_start($shell);
                 <td class="py-3 pr-4"><span class="text-xs border rounded-full px-2 py-1"><?= e($o['paymentMethod']) ?></span></td>
                 <td class="py-3 pr-4"><?= status_badge($o['status']) ?></td>
                 <td class="py-3">
+                  <?php if (($o['deliveryOption'] ?? '') === 'Centralized Pickup'): ?>
+                    <?php if (pickup_is_shop_ready($o['id'], $shopName)): ?>
+                      <span class="inline-flex items-center gap-1 text-xs font-medium text-green-700 mb-2"><i data-lucide="check-circle" class="w-3.5 h-3.5"></i>Sent to centre</span>
+                    <?php else: ?>
+                      <form method="post" action="actions.php" class="mb-2">
+                        <input type="hidden" name="do" value="pickup_ready" />
+                        <input type="hidden" name="id" value="<?= e($o['id']) ?>" />
+                        <button class="w-full border border-green-200 text-green-700 hover:bg-green-50 px-3 py-1.5 rounded-lg text-xs font-medium inline-flex items-center justify-center gap-1"><i data-lucide="package-check" class="w-3.5 h-3.5"></i>Mark items ready</button>
+                      </form>
+                    <?php endif; ?>
+                  <?php endif; ?>
                   <form method="post" action="actions.php" class="flex items-center gap-2">
                     <input type="hidden" name="do" value="order_status" />
                     <input type="hidden" name="id" value="<?= e($o['id']) ?>" />

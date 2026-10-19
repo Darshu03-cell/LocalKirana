@@ -71,6 +71,10 @@ function db_init(PDO $pdo): void {
   }
   // Razorpay payment reference (the rzp payment id) for prepaid orders.
   try { $pdo->exec("ALTER TABLE orders ADD COLUMN paymentRef TEXT"); } catch (Throwable $e) {}
+  // Centralized Pickup: handling fee charged + a snapshot of the collection point.
+  foreach (['pickupFee INTEGER', 'pickupLocation TEXT'] as $col) {
+    try { $pdo->exec("ALTER TABLE orders ADD COLUMN $col"); } catch (Throwable $e) {}
+  }
   $pdo->exec("CREATE TABLE IF NOT EXISTS suppliers (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, contact TEXT, email TEXT, phone TEXT,
     productsSupplied INTEGER, totalVendors INTEGER, rating REAL, verified INTEGER
@@ -130,6 +134,12 @@ function db_init(PDO $pdo): void {
   foreach (['collectedBy TEXT', 'collectedAt TEXT'] as $col) {
     try { $pdo->exec("ALTER TABLE payments ADD COLUMN $col"); } catch (Throwable $e) {}
   }
+  // Per-shop readiness for Centralized Pickup orders: a row means that shop has
+  // prepared its items and handed them to the collection center.
+  $pdo->exec("CREATE TABLE IF NOT EXISTS pickup_readiness (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, orderId TEXT, vendor TEXT, ready_at TEXT
+  )");
+  try { $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_pickup_ready ON pickup_readiness (orderId, vendor)"); } catch (Throwable $e) {}
 }
 
 /* --------------------------- tiny query helpers --------------------------- */

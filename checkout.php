@@ -30,6 +30,10 @@ $availableOffers = eligible_offers($total);
 // Group the cart by store so a multi-store order is shown clearly.
 $byStore = [];
 foreach ($items as $it) { $byStore[$it['vendor'] ?: 'Local store'][] = $it; }
+// Centralized Pickup collection centre (admin-configured) + its handling fee.
+$center     = pickup_center();
+$pickupFee  = (int) $center['fee'];
+$multiStore = count($byStore) > 1;
 
 $methods = [
   ['id' => 'Cash on Delivery', 'icon' => 'wallet',      'desc' => 'Pay with cash when your order arrives'],
@@ -75,15 +79,26 @@ require __DIR__ . '/partials/head.php';
         <div class="bg-white rounded-xl border p-6">
           <h3 class="font-semibold text-lg mb-1">Choose Your Delivery Option</h3>
           <p class="text-gray-600 mb-4">How would you like to receive your order?</p>
-          <div class="grid gap-3 md:grid-cols-2">
+          <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <label class="flex items-start gap-3 border rounded-xl p-4 cursor-pointer hover:border-green-400 has-[:checked]:border-green-500 has-[:checked]:bg-green-50">
               <input type="radio" name="delivery_option" value="Self Pickup" class="mt-1 accent-green-600 delivery-radio" data-option="Self Pickup" checked />
               <div class="flex-1">
                 <div class="flex items-center gap-2 font-semibold text-base">
                   <span class="text-xl">🚶</span>
-                  <span>Self Pickup</span>
+                  <span>Individual Pickup</span>
                 </div>
-                <p class="text-sm text-gray-600 mt-1">Collect your order yourself from the store. No delivery partner needed.</p>
+                <p class="text-sm text-gray-600 mt-1">Collect from each store yourself. No delivery partner needed.</p>
+              </div>
+            </label>
+
+            <label class="flex items-start gap-3 border rounded-xl p-4 cursor-pointer hover:border-green-400 has-[:checked]:border-green-500 has-[:checked]:bg-green-50">
+              <input type="radio" name="delivery_option" value="Centralized Pickup" class="mt-1 accent-green-600 delivery-radio" data-option="Centralized Pickup" />
+              <div class="flex-1">
+                <div class="flex items-center gap-2 font-semibold text-base">
+                  <span class="text-xl">🏬</span>
+                  <span>Centralized Pickup</span>
+                </div>
+                <p class="text-sm text-gray-600 mt-1">Collect your whole order from one collection centre<?= $multiStore ? ' — ideal for multi-shop orders' : '' ?>.<?= $pickupFee > 0 ? ' Handling fee ₹' . $pickupFee . '.' : '' ?></p>
               </div>
             </label>
 
@@ -97,6 +112,13 @@ require __DIR__ . '/partials/head.php';
                 <p class="text-sm text-gray-600 mt-1">A delivery partner brings your order to your address.</p>
               </div>
             </label>
+          </div>
+
+          <!-- Collection-centre details (shown only for Centralized Pickup) -->
+          <div id="pickup-panel" class="hidden mt-4 rounded-lg border bg-gray-50 p-4">
+            <p class="text-sm font-medium flex items-center gap-2"><i data-lucide="building-2" class="w-4 h-4 text-green-600"></i><?= e($center['name']) ?></p>
+            <?php if ($center['address'] !== ''): ?><p class="text-sm text-gray-600 mt-1 flex items-start gap-1.5"><i data-lucide="map-pin" class="w-3.5 h-3.5 mt-0.5 flex-shrink-0"></i><?= e($center['address']) ?></p><?php endif; ?>
+            <p class="text-xs text-gray-500 mt-2">Each shop prepares its items and hands them to the centre. We'll notify you when your complete order is ready to collect.<?= $pickupFee > 0 ? ' A handling fee of ₹' . $pickupFee . ' applies.' : '' ?></p>
           </div>
 
           <!-- Delivery-partner picker (shown only for Home Delivery) -->
@@ -203,6 +225,7 @@ require __DIR__ . '/partials/head.php';
           <div class="flex justify-between text-sm border-t pt-3"><span class="text-gray-600">Subtotal</span><span>₹<?= e($total) ?></span></div>
           <div id="discount-row" class="flex justify-between text-sm mt-1 hidden"><span class="text-gray-600">Offer discount</span><span class="text-green-600">− ₹<span id="discount-amt">0</span></span></div>
           <div class="flex justify-between text-sm mt-1"><span class="text-gray-600">Delivery</span><span class="text-green-600">Free</span></div>
+          <div id="pickup-fee-row" class="flex justify-between text-sm mt-1 hidden"><span class="text-gray-600">Collection handling</span><span>₹<span id="pickup-fee-amt"><?= (int) $pickupFee ?></span></span></div>
           <div class="flex justify-between font-bold text-lg border-t mt-3 pt-3"><span>Total payable</span><span class="text-green-600">₹<span id="total-payable"><?= e($total) ?></span></span></div>
           <button id="place-btn" class="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg mt-5 font-medium">Place Order</button>
           <?php if (razorpay_enabled()): ?>
@@ -253,19 +276,29 @@ require __DIR__ . '/partials/head.php';
   document.querySelectorAll('.pay-radio').forEach(function (r) { r.addEventListener('change', syncPayPanels); });
   syncPayPanels();
 
-  // Show the delivery-partner picker only for Home Delivery, and require it then.
+  // Show the right panel per delivery option: partner picker for Home Delivery,
+  // collection-centre details for Centralized Pickup.
   var partnerPanel  = document.getElementById('partner-panel');
   var partnerSelect = document.getElementById('partner-select');
-  function syncDelivery() {
-    var sel = document.querySelector('.delivery-radio:checked');
-    var home = sel && sel.getAttribute('data-option') === 'Home Delivery';
-    if (partnerPanel) partnerPanel.classList.toggle('hidden', !home);
-    if (partnerSelect) partnerSelect.required = !!home;
-  }
-  document.querySelectorAll('.delivery-radio').forEach(function (r) { r.addEventListener('change', syncDelivery); });
-  syncDelivery();
+  var pickupPanel   = document.getElementById('pickup-panel');
+  var PICKUP_FEE    = <?= (int) $pickupFee ?>;
 
-  // Live offer discount + total payable.
+  function currentDeliveryOption() {
+    var sel = document.querySelector('.delivery-radio:checked');
+    return sel ? sel.getAttribute('data-option') : '';
+  }
+  function currentPickupFee() {
+    return currentDeliveryOption() === 'Centralized Pickup' ? PICKUP_FEE : 0;
+  }
+  function syncDelivery() {
+    var opt = currentDeliveryOption();
+    if (partnerPanel)  partnerPanel.classList.toggle('hidden', opt !== 'Home Delivery');
+    if (partnerSelect) partnerSelect.required = opt === 'Home Delivery';
+    if (pickupPanel)   pickupPanel.classList.toggle('hidden', opt !== 'Centralized Pickup');
+    syncOffer(); // delivery choice changes the handling fee → recompute the total
+  }
+
+  // Live offer discount + handling fee + total payable.
   var SUBTOTAL = <?= (int) $total ?>;
   function syncOffer() {
     var sel = document.querySelector('.offer-radio:checked');
@@ -274,10 +307,13 @@ require __DIR__ . '/partials/head.php';
     var row = document.getElementById('discount-row');
     if (row) row.classList.toggle('hidden', amt <= 0);
     var a = document.getElementById('discount-amt'); if (a) a.textContent = amt;
-    var t = document.getElementById('total-payable'); if (t) t.textContent = (SUBTOTAL - amt);
+    var fee = currentPickupFee();
+    var feeRow = document.getElementById('pickup-fee-row'); if (feeRow) feeRow.classList.toggle('hidden', fee <= 0);
+    var t = document.getElementById('total-payable'); if (t) t.textContent = (SUBTOTAL - amt + fee);
     updatePlaceButton();
   }
+  document.querySelectorAll('.delivery-radio').forEach(function (r) { r.addEventListener('change', syncDelivery); });
   document.querySelectorAll('.offer-radio').forEach(function (r) { r.addEventListener('change', syncOffer); });
-  syncOffer();
+  syncDelivery();
 </script>
 <?php require __DIR__ . '/partials/foot.php'; ?>
