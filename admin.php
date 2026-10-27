@@ -56,7 +56,7 @@ $shell = [
     ['id' => 'payments',  'icon' => 'receipt',          'label' => 'Payments', 'badge' => $paymentList ? (string) count($paymentList) : null],
     ['id' => 'vendors',   'icon' => 'store',            'label' => 'Vendors', 'badge' => count($vendorList) ? (string) count($vendorList) : null],
     ['id' => 'suppliers', 'icon' => 'package',          'label' => 'Suppliers'],
-    ['id' => 'delivery',  'icon' => 'truck',            'label' => 'Delivery Partners'],
+    ['id' => 'delivery',  'icon' => 'truck',            'label' => 'Delivery Partners', 'badge' => ($n = count(array_filter($partnerList, fn($d) => partner_id_status($d) === 'Pending'))) ? (string) $n : null],
     ['id' => 'customers', 'icon' => 'users',            'label' => 'Customers'],
     ['id' => 'users',     'icon' => 'key-round',        'label' => 'App Users', 'badge' => $accountList ? (string) count($accountList) : null],
     ['id' => 'analytics', 'icon' => 'trending-up',      'label' => 'Analytics'],
@@ -213,13 +213,63 @@ render_dashboard_start($shell);
 
 <?php elseif ($tab === 'delivery'): ?>
   <div class="bg-white rounded-xl border p-6 overflow-x-auto">
-    <h3 class="font-bold text-lg mb-4">Delivery Partners <span class="text-gray-400 font-normal">(<?= count($partnerList) ?>)</span></h3>
+    <?php $toVerify = count(array_filter($partnerList, fn($d) => partner_id_status($d) === 'Pending')); ?>
+    <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
+      <h3 class="font-bold text-lg">Delivery Partners <span class="text-gray-400 font-normal">(<?= count($partnerList) ?>)</span></h3>
+      <?php if ($toVerify): ?><span class="text-xs font-medium px-2.5 py-1 rounded-full bg-amber-100 text-amber-700"><?= $toVerify ?> waiting for ID verification</span><?php endif; ?>
+    </div>
+    <p class="text-sm text-gray-500 mb-4">Only <strong>verified</strong> partners can be chosen by customers for Home Delivery. Open each ID proof, check it matches the name and photo, then approve or reject.</p>
     <?php if ($partnerList): ?>
       <table class="w-full text-sm">
-        <thead><tr class="text-left text-gray-500 border-b"><th class="py-2 pr-4">Name</th><th class="py-2 pr-4">Email</th><th class="py-2 pr-4">Phone</th><th class="py-2 pr-4">Vehicle</th><th class="py-2">Status</th></tr></thead>
+        <thead><tr class="text-left text-gray-500 border-b"><th class="py-2 pr-4">Partner</th><th class="py-2 pr-4">Contact &amp; address</th><th class="py-2 pr-4">ID proof</th><th class="py-2 pr-4">Verification</th><th class="py-2">Action</th></tr></thead>
         <tbody>
-          <?php foreach ($partnerList as $d): ?>
-            <tr class="border-b last:border-0"><td class="py-3 pr-4 font-medium"><?= e($d['name']) ?></td><td class="py-3 pr-4 text-green-700"><?= e($d['email'] ?: '—') ?></td><td class="py-3 pr-4"><?= e($d['phone'] ?: '—') ?></td><td class="py-3 pr-4"><?= e($d['vehicle']) ?></td><td class="py-3"><span class="text-xs font-medium px-2 py-1 rounded-full bg-green-100 text-green-700"><?= e($d['status']) ?></span></td></tr>
+          <?php foreach ($partnerList as $d): $ids = partner_id_status($d); ?>
+            <tr class="border-b last:border-0 align-top">
+              <td class="py-3 pr-4">
+                <div class="flex items-center gap-3">
+                  <?php if (!empty($d['photo'])): ?><a href="<?= e($d['photo']) ?>" target="_blank" rel="noopener"><img src="<?= e($d['photo']) ?>" alt="" class="w-11 h-11 rounded-full object-cover border" /></a>
+                  <?php else: ?><div class="w-11 h-11 rounded-full bg-gray-100 border flex items-center justify-center text-gray-400" title="No photo"><i data-lucide="user" class="w-5 h-5"></i></div><?php endif; ?>
+                  <div><p class="font-medium"><?= e($d['name']) ?></p><p class="text-xs text-gray-500"><?= e($d['vehicle'] ?: 'Bike') ?> · <?= e($d['status']) ?></p></div>
+                </div>
+              </td>
+              <td class="py-3 pr-4 max-w-xs">
+                <p class="text-green-700"><?= e($d['email'] ?: '—') ?></p>
+                <p><?= e($d['phone'] ?: '—') ?></p>
+                <p class="text-xs text-gray-500 mt-0.5"><?= e($d['address'] ?: 'No address yet') ?></p>
+              </td>
+              <td class="py-3 pr-4">
+                <?php if (!empty($d['idDoc'])): ?>
+                  <p class="font-medium"><?= e($d['idType']) ?></p>
+                  <p class="text-xs text-gray-500 font-mono"><?= e(partner_id_masked((string) $d['idNumber'])) ?></p>
+                  <a href="id-doc.php?id=<?= (int) $d['id'] ?>" target="_blank" rel="noopener" class="text-xs text-green-700 font-medium hover:underline inline-flex items-center gap-1 mt-1"><i data-lucide="file-search" class="w-3.5 h-3.5"></i>View document</a>
+                <?php else: ?><span class="text-xs text-gray-400">Not uploaded</span><?php endif; ?>
+              </td>
+              <td class="py-3 pr-4">
+                <?php $chip = ['Verified' => 'bg-green-100 text-green-700', 'Pending' => 'bg-amber-100 text-amber-700', 'Rejected' => 'bg-red-100 text-red-700'][$ids] ?? 'bg-gray-100 text-gray-600'; ?>
+                <span class="text-xs font-medium px-2 py-1 rounded-full <?= $chip ?>"><?= e($ids) ?></span>
+                <?php if (!empty($d['idSubmittedAt'])): ?><p class="text-[11px] text-gray-400 mt-1">Sent <?= e(substr($d['idSubmittedAt'], 0, 16)) ?></p><?php endif; ?>
+                <?php if ($ids === 'Rejected' && !empty($d['idNote'])): ?><p class="text-[11px] text-red-600 mt-1"><?= e($d['idNote']) ?></p><?php endif; ?>
+              </td>
+              <td class="py-3">
+                <?php if (!empty($d['idDoc'])): ?>
+                  <div class="flex flex-col gap-2 min-w-[11rem]">
+                    <?php if ($ids !== 'Verified'): ?>
+                      <form method="post" action="actions.php" data-confirm="Approve <?= e($d['name']) ?>'s <?= e($d['idType']) ?>? They will start receiving orders.">
+                        <input type="hidden" name="do" value="partner_review" /><input type="hidden" name="id" value="<?= (int) $d['id'] ?>" /><input type="hidden" name="decision" value="approve" />
+                        <button class="w-full bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium inline-flex items-center justify-center gap-1"><i data-lucide="shield-check" class="w-3.5 h-3.5"></i>Approve</button>
+                      </form>
+                    <?php endif; ?>
+                    <?php if ($ids !== 'Rejected'): ?>
+                      <form method="post" action="actions.php" class="flex gap-1">
+                        <input type="hidden" name="do" value="partner_review" /><input type="hidden" name="id" value="<?= (int) $d['id'] ?>" /><input type="hidden" name="decision" value="reject" />
+                        <input name="note" placeholder="Reason (optional)" class="flex-1 min-w-0 border rounded-lg px-2 py-1 text-xs" />
+                        <button class="border border-red-200 text-red-600 hover:bg-red-50 px-2.5 py-1 rounded-lg text-xs"><?= $ids === 'Verified' ? 'Revoke' : 'Reject' ?></button>
+                      </form>
+                    <?php endif; ?>
+                  </div>
+                <?php else: ?><span class="text-xs text-gray-400">Waiting for upload</span><?php endif; ?>
+              </td>
+            </tr>
           <?php endforeach; ?>
         </tbody>
       </table>

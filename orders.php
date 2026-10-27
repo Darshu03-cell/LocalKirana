@@ -25,9 +25,9 @@ function step_index(string $status): int {
   $steps = ['Pending' => 0, 'Processing' => 1, 'In Transit' => 2, 'Delivered' => 3];
   return $steps[$status] ?? 0;
 }
-function status_badge(string $status): string {
+function status_badge(string $status, string $deliveryOption = ''): string {
   $map = ['Delivered' => 'bg-green-100 text-green-700', 'In Transit' => 'bg-blue-100 text-blue-700', 'Processing' => 'bg-amber-100 text-amber-700', 'Pending' => 'bg-gray-100 text-gray-700', 'Cancelled' => 'bg-red-100 text-red-700'];
-  return '<span class="text-xs font-medium px-2.5 py-1 rounded-full ' . ($map[$status] ?? 'bg-gray-100 text-gray-700') . '">' . e($status) . '</span>';
+  return '<span class="text-xs font-medium px-2.5 py-1 rounded-full ' . ($map[$status] ?? 'bg-gray-100 text-gray-700') . '">' . e(order_status_label($status, $deliveryOption)) . '</span>';
 }
 function return_status_badge(string $status): string {
   $map = ['Approved' => 'bg-green-100 text-green-700', 'Refunded' => 'bg-emerald-100 text-emerald-700', 'Rejected' => 'bg-red-100 text-red-700', 'Requested' => 'bg-amber-100 text-amber-700'];
@@ -130,7 +130,7 @@ require __DIR__ . '/partials/head.php';
               <div>
                 <div class="flex items-center gap-3">
                   <span class="font-bold"><?= e($o['id']) ?></span>
-                  <?= status_badge($o['status']) ?>
+                  <?= status_badge($o['status'], (string) ($o['deliveryOption'] ?? '')) ?>
                 </div>
                 <p class="text-xs text-gray-500 mt-1">Placed on <?= e($o['date']) ?> · <?= e($o['vendor'] ?: 'Local store') ?></p>
               </div>
@@ -175,7 +175,7 @@ require __DIR__ . '/partials/head.php';
                       <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold <?= $done ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-500' ?>">
                         <?php if ($done): ?><i data-lucide="check" class="w-4 h-4"></i><?php else: ?><?= $i + 1 ?><?php endif; ?>
                       </div>
-                      <span class="text-[11px] mt-1 <?= $done ? 'text-green-700 font-medium' : 'text-gray-400' ?>"><?= e($step) ?></span>
+                      <span class="text-[11px] mt-1 text-center <?= $done ? 'text-green-700 font-medium' : 'text-gray-400' ?>"><?= e(order_status_label($step, (string) ($o['deliveryOption'] ?? ''))) ?></span>
                     </div>
                     <?php if ($i < count($STEPS) - 1): ?>
                       <div class="flex-1 h-1 rounded <?= $i < $active ? 'bg-green-600' : 'bg-gray-200' ?>"></div>
@@ -229,6 +229,67 @@ require __DIR__ . '/partials/head.php';
                     </div>
                     <span class="tracking-eta font-medium text-gray-600" data-eta-for="<?= e($mapId) ?>"></span>
                   </div>
+
+                  <?php $rider = delivery_partner_find((int) ($o['deliveryPartnerId'] ?? 0)); if ($rider && !$isDone): ?>
+                    <!-- Assigned delivery partner: photo + contact so the customer can recognise / call them -->
+                    <div class="mt-4 flex items-center justify-between gap-3 flex-wrap rounded-lg border bg-blue-50/50 p-3">
+                      <div class="flex items-center gap-3">
+                        <?php if (!empty($rider['photo'])): ?>
+                          <img src="<?= e($rider['photo']) ?>" alt="Photo of <?= e($rider['name']) ?>" class="w-14 h-14 rounded-full object-cover border-2 border-white shadow" />
+                        <?php else: ?>
+                          <div class="w-14 h-14 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-lg"><?= e(mb_substr($rider['name'], 0, 1)) ?></div>
+                        <?php endif; ?>
+                        <div>
+                          <p class="text-xs text-gray-500">Your delivery partner</p>
+                          <p class="font-semibold text-gray-900"><?= e($rider['name']) ?><?php if (partner_is_verified($rider)): ?> <span class="text-xs font-medium text-green-700 inline-flex items-center gap-0.5"><i data-lucide="badge-check" class="w-3.5 h-3.5"></i>ID verified</span><?php endif; ?></p>
+                          <p class="text-xs text-gray-500"><?= e($rider['vehicle'] ?: 'Bike') ?><?php if (!empty($rider['phone'])): ?> · <?= e($rider['phone']) ?><?php endif; ?></p>
+                        </div>
+                      </div>
+                      <?php if (!empty($rider['phone'])): ?>
+                        <a href="tel:<?= e(preg_replace('/[^0-9+]/', '', $rider['phone'])) ?>" class="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg"><i data-lucide="phone" class="w-4 h-4"></i>Call partner</a>
+                      <?php endif; ?>
+                    </div>
+                  <?php endif; ?>
+                </div>
+              <?php endif; ?>
+
+              <?php
+                // Self Pickup: where each store is, with directions, so the customer can go collect.
+                if (($o['deliveryOption'] ?? '') === 'Self Pickup' && $o['status'] !== 'Cancelled'):
+                  $pickupShops = pickup_shops_for_order($o['id']) ?: array_filter([$o['vendor'] !== 'Multiple Stores' ? $o['vendor'] : '']);
+                  $isReady = $o['status'] === 'In Transit';
+                  $isCollected = $o['status'] === 'Delivered';
+              ?>
+                <div class="mt-6 border-t pt-4">
+                  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <p class="text-sm font-semibold text-gray-700 flex items-center gap-2"><i data-lucide="shopping-bag" class="w-4 h-4 text-green-600"></i>Collect from the store</p>
+                    <?php if ($isCollected): ?>
+                      <span class="inline-flex items-center gap-1.5 text-xs font-medium text-green-700 bg-green-100 rounded-full px-2.5 py-1"><i data-lucide="check-circle" class="w-3.5 h-3.5"></i>Collected</span>
+                    <?php elseif ($isReady): ?>
+                      <span class="inline-flex items-center gap-1.5 text-xs font-medium text-green-700 bg-green-100 rounded-full px-2.5 py-1"><span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-green-600"></span></span>Ready for collection</span>
+                    <?php elseif ($o['status'] === 'Processing'): ?>
+                      <span class="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700 bg-amber-100 rounded-full px-2.5 py-1"><i data-lucide="package" class="w-3.5 h-3.5"></i>Accepted · being packed</span>
+                    <?php else: ?>
+                      <span class="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded-full px-2.5 py-1"><i data-lucide="clock" class="w-3.5 h-3.5"></i>Waiting for the store to accept</span>
+                    <?php endif; ?>
+                  </div>
+                  <div class="space-y-3">
+                    <?php foreach ($pickupShops as $shopName): $sv = vendor_by_name($shopName); $sAddr = $sv ? format_address($sv['address'] ?? '', $sv['city'] ?? '') : ''; ?>
+                      <div class="rounded-lg border bg-gray-50 p-4 flex items-start justify-between gap-3 flex-wrap">
+                        <div class="min-w-0">
+                          <p class="font-medium text-gray-900 flex items-center gap-1.5"><i data-lucide="store" class="w-4 h-4 text-green-600"></i><?= e($shopName) ?></p>
+                          <p class="text-sm text-gray-600 mt-1 flex items-start gap-1.5"><i data-lucide="map-pin" class="w-4 h-4 mt-0.5 flex-shrink-0"></i><?= e($sAddr ?: 'The store has not added its address yet — please call them.') ?></p>
+                          <?php if ($sv && !empty($sv['phone'])): ?><p class="text-sm text-gray-600 mt-1 flex items-center gap-1.5"><i data-lucide="phone" class="w-4 h-4"></i><a href="tel:<?= e(preg_replace('/[^0-9+]/', '', $sv['phone'])) ?>" class="hover:underline"><?= e($sv['phone']) ?></a></p><?php endif; ?>
+                        </div>
+                        <?php if ($sv && ($sAddr !== '' || $sv['lat'] !== null)): ?>
+                          <a href="<?= e(directions_url($sv['lat'] !== null ? (float) $sv['lat'] : null, $sv['lng'] !== null ? (float) $sv['lng'] : null, $shopName . ', ' . $sAddr)) ?>" target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white text-sm font-medium px-4 py-2 rounded-lg shrink-0"><i data-lucide="navigation" class="w-4 h-4"></i>Get directions</a>
+                        <?php endif; ?>
+                      </div>
+                    <?php endforeach; ?>
+                  </div>
+                  <?php if ($isReady): ?>
+                    <p class="text-sm text-green-800 bg-green-50 border border-green-200 rounded-lg p-3 mt-3"><?= order_is_prepaid($o) ? 'Your order is ready — show order number ' . e($o['id']) . ' at the counter.' : 'Your order is ready — pay ₹' . order_grand_total($o) . ' at the counter and show order number ' . e($o['id']) . '.' ?></p>
+                  <?php endif; ?>
                 </div>
               <?php endif; ?>
 
@@ -300,7 +361,7 @@ require __DIR__ . '/partials/head.php';
               <div class="flex items-center justify-between mt-6 flex-wrap gap-3">
                 <?php $addr = order_delivery_address($o); ?>
                 <div class="flex items-start gap-2 text-sm text-gray-600">
-                  <?php if ($addr !== '' && ($o['deliveryOption'] ?? '') !== 'Centralized Pickup'): ?><i data-lucide="map-pin" class="w-4 h-4 mt-0.5 flex-shrink-0"></i><span><?= ($o['deliveryOption'] ?? '') === 'Home Delivery' ? 'Delivering to' : 'Delivery address' ?>: <?= e($addr) ?></span><?php endif; ?>
+                  <?php if ($addr !== '' && ($o['deliveryOption'] ?? '') === 'Home Delivery'): ?><i data-lucide="map-pin" class="w-4 h-4 mt-0.5 flex-shrink-0"></i><span><?= ($o['deliveryOption'] ?? '') === 'Home Delivery' ? 'Delivering to' : 'Delivery address' ?>: <?= e($addr) ?></span><?php endif; ?>
                 </div>
                 <?php if ($o['status'] === 'Pending'): ?>
                   <form method="post" action="actions.php" data-confirm="Cancel order <?= e($o['id']) ?>?">
@@ -311,14 +372,18 @@ require __DIR__ . '/partials/head.php';
                 <?php endif; ?>
               </div>
 
-              <?php if ($o['status'] === 'Delivered'): $returns = return_requests_for_order($o['id']); ?>
+              <?php
+                // "Request a return" is switched off for customers. Any return raised
+                // earlier still shows its status here so nothing goes missing.
+                $returns = $o['status'] === 'Delivered' ? return_requests_for_order($o['id']) : [];
+                if ($returns):
+              ?>
                 <div class="mt-6 border-t pt-4">
                   <div class="flex items-center gap-2 mb-3">
                     <i data-lucide="undo-2" class="w-4 h-4 text-gray-500"></i>
                     <p class="text-sm font-semibold text-gray-700">Returns</p>
                   </div>
-                  <?php if ($returns): ?>
-                    <div class="space-y-2 mb-4">
+                    <div class="space-y-2">
                       <?php foreach ($returns as $r): ?>
                         <div class="flex items-center justify-between text-sm bg-gray-50 rounded-lg px-3 py-2">
                           <span class="text-gray-700"><?= e($r['item']) ?> <span class="text-gray-400">× <?= e($r['quantity']) ?></span> — <span class="text-gray-500"><?= e($r['reason']) ?></span></span>
@@ -326,35 +391,6 @@ require __DIR__ . '/partials/head.php';
                         </div>
                       <?php endforeach; ?>
                     </div>
-                  <?php endif; ?>
-                  <details class="group">
-                    <summary class="cursor-pointer text-sm text-green-600 font-medium select-none">Request a return</summary>
-                    <form method="post" action="actions.php" class="mt-3 space-y-3 bg-gray-50 rounded-lg p-4">
-                      <input type="hidden" name="do" value="return_request" />
-                      <input type="hidden" name="id" value="<?= e($o['id']) ?>" />
-                      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div class="sm:col-span-2">
-                          <label class="block text-xs font-medium text-gray-500 mb-1">Item to return</label>
-                          <?php if ($lines): ?>
-                            <select name="item" required class="w-full border rounded-lg px-3 py-2 text-sm">
-                              <?php foreach ($lines as $li): ?><option value="<?= e($li['name']) ?>"><?= e($li['name']) ?></option><?php endforeach; ?>
-                            </select>
-                          <?php else: ?>
-                            <input type="text" name="item" required value="Whole order" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Which item?" />
-                          <?php endif; ?>
-                        </div>
-                        <div>
-                          <label class="block text-xs font-medium text-gray-500 mb-1">Quantity</label>
-                          <input type="number" name="quantity" min="1" value="1" class="w-full border rounded-lg px-3 py-2 text-sm" />
-                        </div>
-                      </div>
-                      <div>
-                        <label class="block text-xs font-medium text-gray-500 mb-1">Reason</label>
-                        <textarea name="reason" required rows="2" placeholder="Tell us what went wrong (damaged, wrong item, expired, ...)" class="w-full border rounded-lg px-3 py-2 text-sm"></textarea>
-                      </div>
-                      <button class="text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg px-4 py-2">Submit return request</button>
-                    </form>
-                  </details>
                 </div>
               <?php endif; ?>
             </div>

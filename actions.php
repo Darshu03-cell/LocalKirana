@@ -6,6 +6,29 @@ require_once __DIR__ . '/includes/init.php';
 $do = $_POST['do'] ?? $_GET['do'] ?? '';
 $user = current_user();
 
+/** Stop unless the signed-in user has one of these roles (each role only reaches its own features). */
+function deny_unless(?array $user, array $roles): void {
+  if (!$user || !in_array($user['role'] ?? '', $roles, true)) {
+    set_flash('Please sign in with the right account to do that.', 'error');
+    header('Location: login.php');
+    exit;
+  }
+}
+
+/** Stop with an error message (used when a record isn't the user's own). */
+function deny_with(string $message, string $to): void {
+  set_flash($message, 'error');
+  header('Location: ' . $to);
+  exit;
+}
+
+/** May this user edit/delete this product? Vendors: only their own shop's; admins: any. */
+function can_manage_product(array $user, int $productId): bool {
+  if (($user['role'] ?? '') === 'admin') return true;
+  $p = db_row("SELECT vendor FROM products WHERE id = :id", [':id' => $productId]);
+  return $p && ($user['role'] ?? '') === 'vendor' && $p['vendor'] === ($user['shopName'] ?? '');
+}
+
 switch ($do) {
 
   /* ------------------------------- customer ------------------------------- */
@@ -34,7 +57,9 @@ switch ($do) {
     $partner = null;
     if ($deliveryOption === 'Home Delivery') {
       $pid = (int) ($_POST['delivery_partner_id'] ?? 0);
-      $partner = $pid ? db_row("SELECT * FROM delivery_partners WHERE id = :id", [':id' => $pid]) : null;
+      $partner = delivery_partner_find($pid);
+      // Only active, ID-verified partners may be assigned.
+      if ($partner && (!partner_is_verified($partner) || ($partner['status'] ?? '') !== 'Active')) $partner = null;
       if (!$partner) {
         set_flash('Please choose a delivery partner for Home Delivery.', 'error');
         header('Location: checkout.php');
@@ -156,6 +181,9 @@ switch ($do) {
 
   case 'return_request':
     if (!$user || ($user['role'] ?? '') !== 'customer') { header('Location: login.php'); exit; }
+    // Customer return requests are switched off (the option is hidden in My Orders).
+    // Delete this line to turn them back on — the rest of the flow still works.
+    deny_with('Return requests are not available. Please contact the store directly.', 'orders.php');
     $orderId = $_POST['id'] ?? '';
     $order = db_row("SELECT * FROM orders WHERE id = :id", [':id' => $orderId]);
     // The order must exist, belong to this customer, and be delivered.
@@ -240,7 +268,10 @@ switch ($do) {
     exit;
 
   case 'product_update':
+    deny_unless($user, ['vendor', 'admin']);
+    if (!can_manage_product($user, (int) ($_POST['id'] ?? 0))) deny_with('You can only edit your own products.', 'vendor.php?tab=products');
     $data = $_POST;
+    if (($user['role'] ?? '') === 'vendor') unset($data['vendor']);
     $img  = save_uploaded_image('image_file');
     if ($img) $data['image'] = $img;
     product_update((int)$_POST['id'], $data);
@@ -250,6 +281,8 @@ switch ($do) {
     exit;
 
   case 'product_delete':
+    deny_unless($user, ['vendor', 'admin']);
+    if (!can_manage_product($user, (int) ($_POST['id'] ?? 0))) deny_with('You can only delete your own products.', 'vendor.php?tab=products');
     product_delete((int)$_POST['id']);
     set_flash('Product deleted.', 'error');
     header('Location: ' . safe_redirect('vendor.php?tab=products'));
@@ -270,8 +303,19 @@ switch ($do) {
     exit;
 
   case 'order_status':
-    order_set_status($_POST['id'], $_POST['status']);
-    set_flash('Order ' . $_POST['id'] . ' marked ' . $_POST['status'] . '.');
+    deny_unless($user, ['vendor', 'admin', 'superadmin']);
+    $oid    = (string) ($_POST['id'] ?? '');
+    $status = (string) ($_POST['status'] ?? '');
+    if (!in_array($status, ['Pending', 'Processing', 'In Transit', 'Delivered'], true)) deny_with('Unknown order status.', safe_redirect('vendor.php?tab=orders'));
+    // A vendor may only move orders that include their own shop's items.
+    if (($user['role'] ?? '') === 'vendor'
+        && !in_array($oid, array_column(vendor_orders($user['shopName'] ?? ''), 'id'), true)) {
+      deny_with('That order is not from your store.', 'vendor.php?tab=orders');
+    }
+    $o = db_row("SELECT deliveryOption FROM orders WHERE id = :id", [':id' => $oid]);
+    if (!$o) deny_with('Order not found.', safe_redirect('vendor.php?tab=orders'));
+    order_set_status($oid, $status);
+    set_flash('Order ' . $oid . ' marked ' . order_status_label($status, (string) ($o['deliveryOption'] ?? '')) . '.');
     header('Location: ' . safe_redirect('vendor.php?tab=orders'));
     exit;
 
@@ -296,6 +340,7 @@ switch ($do) {
       $phone    = $_POST['phone'] ?? ($user['phone'] ?? '');
       $shopName = $_POST['shopName'] ?: ($user['shopName'] ?? '');
       vendor_settings_update($user['email'] ?? '', $name, $phone, $shopName);
+      vendor_location_update($user['email'] ?? '', $_POST['address'] ?? '', $_POST['city'] ?? '', $_POST['lat'] ?? null, $_POST['lng'] ?? null);
       // Reflect immediately in the current session.
       $_SESSION['user']['name']     = $name;
       $_SESSION['user']['phone']    = $phone;
@@ -307,6 +352,7 @@ switch ($do) {
 
   /* --------------------------------- admin -------------------------------- */
   case 'approval':
+    deny_unless($user, ['admin']);
     approval_resolve((int)$_POST['id']);
     set_flash(($_POST['decision'] === 'approve' ? 'Approved: ' : 'Rejected: ') . $_POST['name'],
               $_POST['decision'] === 'approve' ? 'success' : 'error');
@@ -314,6 +360,7 @@ switch ($do) {
     exit;
 
   case 'vendor_add':
+    deny_unless($user, ['admin']);
     vendor_add($_POST);
     $msg = 'Vendor "' . ($_POST['name'] ?: 'New Vendor') . '" added.';
     if (!empty($_POST['email']) && !empty($_POST['password'])) {
@@ -324,6 +371,7 @@ switch ($do) {
     exit;
 
   case 'vendor_update':
+    deny_unless($user, ['admin']);
     vendor_update((int)$_POST['id'], $_POST);
     set_flash(!empty($_POST['email']) && !empty($_POST['password'])
       ? 'Vendor updated. Login set for ' . $_POST['email'] . '.'
@@ -332,6 +380,7 @@ switch ($do) {
     exit;
 
   case 'vendor_delete':
+    deny_unless($user, ['admin']);
     vendor_delete((int)$_POST['id']);
     set_flash('Vendor removed.', 'error');
     header('Location: ' . safe_redirect('admin.php?tab=vendors'));
@@ -415,24 +464,31 @@ switch ($do) {
 
   /* ------------------------------- supplier ------------------------------- */
   case 'supplier_request':
+    deny_unless($user, ['supplier']);
+    if (!in_array($_POST['status'] ?? '', ['Approved', 'Rejected'], true)) deny_with('Unknown request status.', 'supplier.php');
     supplier_request_set_status((int)$_POST['id'], $_POST['status']);
     set_flash('Request ' . $_POST['status'] . '.', $_POST['status'] === 'Approved' ? 'success' : 'error');
     header('Location: ' . safe_redirect('supplier.php'));
     exit;
 
   case 'sup_product_add':
-    supplier_product_add($_POST + ['supplier' => $user['email'] ?? '']);
+    deny_unless($user, ['supplier']);
+    supplier_product_add(['supplier' => $user['email'] ?? ''] + $_POST);
     set_flash('Product "' . ($_POST['name'] ?: 'New Product') . '" added.');
     header('Location: ' . safe_redirect('supplier.php?tab=products'));
     exit;
 
   case 'sup_product_update':
+    deny_unless($user, ['supplier']);
+    if (!db_row("SELECT 1 FROM supplier_products WHERE id = :id AND supplier = :s", [':id' => (int) ($_POST['id'] ?? 0), ':s' => $user['email'] ?? ''])) deny_with('You can only edit your own products.', 'supplier.php?tab=products');
     supplier_product_update((int)$_POST['id'], $_POST);
     set_flash('Product updated.');
     header('Location: ' . safe_redirect('supplier.php?tab=products'));
     exit;
 
   case 'sup_product_delete':
+    deny_unless($user, ['supplier']);
+    if (!db_row("SELECT 1 FROM supplier_products WHERE id = :id AND supplier = :s", [':id' => (int) ($_POST['id'] ?? 0), ':s' => $user['email'] ?? ''])) deny_with('You can only delete your own products.', 'supplier.php?tab=products');
     supplier_product_delete((int)$_POST['id']);
     set_flash('Product deleted.', 'error');
     header('Location: ' . safe_redirect('supplier.php?tab=products'));
@@ -442,6 +498,11 @@ switch ($do) {
   case 'delivery_advance':
     if (!$user || ($user['role'] ?? '') !== 'delivery') { header('Location: login.php'); exit; }
     $before = delivery_for_order($_POST['id'] ?? '');
+    // Only the partner the job is assigned to can pick it up / complete it.
+    $me = delivery_partner_by_email($user['email'] ?? '');
+    if (!$before || !$me || (int) ($before['partnerId'] ?? 0) !== (int) $me['id']) {
+      deny_with('That delivery is not assigned to you.', 'delivery.php?tab=active');
+    }
     delivery_advance($_POST['id'] ?? '', $user['name'] ?? '');
     // A "Picked Up" row that we just completed means cash (for COD) was collected.
     if ($before && ($before['status'] ?? '') === 'Picked Up') {
@@ -453,6 +514,60 @@ switch ($do) {
       set_flash('Delivery ' . ($_POST['id'] ?? '') . ' updated.');
     }
     header('Location: ' . safe_redirect('delivery.php'));
+    exit;
+
+  case 'delivery_profile_save':
+    deny_unless($user, ['delivery']);
+    $me = delivery_partner_by_email($user['email'] ?? '');
+    if (!$me) $me = delivery_profile_create(['name' => $user['name'] ?? '', 'email' => $user['email'] ?? '', 'phone' => $user['phone'] ?? '', 'vehicle' => 'Bike']);
+    $back = 'delivery.php?tab=profile';
+
+    $fields = $_POST;
+    if (trim($fields['name'] ?? '') === '' || trim($fields['phone'] ?? '') === '' || trim($fields['address'] ?? '') === '') {
+      deny_with('Please fill in your full name, contact number and address.', $back);
+    }
+    if (!preg_match('/^\+?[0-9][0-9\s-]{8,15}$/', trim($fields['phone']))) deny_with('Please enter a valid contact number.', $back);
+
+    $photo = save_uploaded_image('photo_file');
+    if (upload_attempted('photo_file') && !$photo) deny_with('Profile photo must be a JPG, PNG, WebP or GIF under 3 MB.', $back);
+    if (!$photo && empty($me['photo'])) deny_with('Please upload a profile photograph.', $back);
+
+    // ID proof: re-submitted whenever the type, number or document changes.
+    $idType   = (string) ($fields['id_type'] ?? '');
+    $idNumRaw = trim((string) ($fields['id_number'] ?? ''));
+    $idChanged = upload_attempted('id_file') || $idType !== (string) ($me['idType'] ?? '')
+              || ($idNumRaw !== '' && strtoupper(preg_replace('/[\s-]+/', '', $idNumRaw)) !== (string) ($me['idNumber'] ?? ''));
+    $id = null;
+    if ($idChanged) {
+      if (!in_array($idType, PARTNER_ID_TYPES, true)) deny_with('Please choose Aadhaar Card, PAN Card or Voter ID.', $back);
+      // A blank number keeps the saved one (when the document type is unchanged).
+      $numSrc = $idNumRaw !== '' ? $idNumRaw : ($idType === (string) ($me['idType'] ?? '') ? (string) ($me['idNumber'] ?? '') : '');
+      $num = partner_id_number_clean($idType, $numSrc);
+      if ($num === null) deny_with('That ' . $idType . ' number doesn\'t look right — please check it.', $back);
+      $doc = save_private_document('id_file');
+      if (upload_attempted('id_file') && !$doc) deny_with('ID proof must be a JPG, PNG, WebP or PDF under 5 MB.', $back);
+      if (!$doc && empty($me['idDoc'])) deny_with('Please upload a photo or scan of your ' . $idType . '.', $back);
+      $id = ['type' => $idType, 'number' => $num, 'doc' => $doc ?? ''];
+    }
+
+    delivery_partner_save_profile((int) $me['id'], $fields, $photo, $id);
+    db_exec("UPDATE accounts SET name = :n, phone = :p WHERE lower(email) = lower(:e)",
+      [':n' => trim($fields['name']), ':p' => trim($fields['phone']), ':e' => $user['email'] ?? '']);
+    $_SESSION['user']['name']  = trim($fields['name']);
+    $_SESSION['user']['phone'] = trim($fields['phone']);
+    set_flash($id ? 'Profile saved. Your ID proof has been sent for verification.' : 'Profile saved.');
+    header('Location: ' . $back);
+    exit;
+
+  case 'partner_review':
+    deny_unless($user, ['admin']);
+    $pid = (int) ($_POST['id'] ?? 0);
+    $approve = ($_POST['decision'] ?? '') === 'approve';
+    $p = delivery_partner_find($pid);
+    if (!$p || empty($p['idDoc'])) deny_with('This partner has not uploaded an ID proof yet.', 'admin.php?tab=delivery');
+    delivery_partner_review($pid, $approve, (string) ($_POST['note'] ?? ''));
+    set_flash($p['name'] . ($approve ? ' is verified and can now receive orders.' : '\'s ID was rejected — they have been asked to re-upload.'), $approve ? 'success' : 'error');
+    header('Location: admin.php?tab=delivery');
     exit;
 
   /* --------------------------- centralized pickup -------------------------- */

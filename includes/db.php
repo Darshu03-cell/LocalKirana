@@ -8,6 +8,7 @@ function db(): PDO {
 
   $dir = __DIR__ . '/../data';
   if (!is_dir($dir)) @mkdir($dir, 0777, true);
+  data_dir_protect($dir);
 
   $pdo = new PDO('sqlite:' . $dir . '/localkirana.sqlite');
   $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -16,6 +17,16 @@ function db(): PDO {
 
   db_init($pdo);
   return $pdo;
+}
+
+/** data/ holds the database, sessions and ID-proof documents — none of it may ever
+ *  be served over the web. Make sure an Apache/LiteSpeed deny rule is in place. */
+function data_dir_protect(string $dir): void {
+  $ht = $dir . '/.htaccess';
+  if (is_file($ht)) return;
+  @file_put_contents($ht, "# Never serve anything in this folder (database, sessions, ID documents).\n"
+    . "<IfModule mod_authz_core.c>\n  Require all denied\n</IfModule>\n"
+    . "<IfModule !mod_authz_core.c>\n  Order allow,deny\n  Deny from all\n</IfModule>\n");
 }
 
 function db_init(PDO $pdo): void {
@@ -37,6 +48,10 @@ function db_init(PDO $pdo): void {
   )");
   // Migration: a separate "hygiene certified" flag (admin-verified), shown to customers.
   try { $pdo->exec("ALTER TABLE vendors ADD COLUMN hygiene_verified INTEGER"); } catch (Throwable $e) {}
+  // Store map position (set by the vendor) — used for "nearby shops" and pickup directions.
+  foreach (['lat REAL', 'lng REAL'] as $col) {
+    try { $pdo->exec("ALTER TABLE vendors ADD COLUMN $col"); } catch (Throwable $e) {}
+  }
   $pdo->exec("CREATE TABLE IF NOT EXISTS products (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, category TEXT, price INTEGER, stock INTEGER,
     image TEXT, vendor TEXT, rating REAL, unit TEXT
@@ -83,6 +98,13 @@ function db_init(PDO $pdo): void {
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, email TEXT, phone TEXT, vehicle TEXT,
     totalDeliveries INTEGER, rating REAL, status TEXT, earnings INTEGER
   )");
+  // Partner profile + identity verification. idDoc is a file name inside the private
+  // data/id_docs folder (never web-served); idStatus is Not submitted | Pending |
+  // Verified | Rejected. Only Verified partners can be assigned orders.
+  foreach (['address TEXT', 'photo TEXT', 'idType TEXT', 'idNumber TEXT', 'idDoc TEXT', 'idStatus TEXT',
+            'idNote TEXT', 'idSubmittedAt TEXT', 'lat REAL', 'lng REAL'] as $col) {
+    try { $pdo->exec("ALTER TABLE delivery_partners ADD COLUMN $col"); } catch (Throwable $e) {}
+  }
   $pdo->exec("CREATE TABLE IF NOT EXISTS supplier_products (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, category TEXT, price INTEGER, stock INTEGER, supplier TEXT
   )");
@@ -97,6 +119,14 @@ function db_init(PDO $pdo): void {
   $pdo->exec("CREATE TABLE IF NOT EXISTS completed_deliveries (
     cid INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT, customer TEXT, amount INTEGER, earnings INTEGER, time TEXT
   )");
+  // Which partner completed it, so each partner sees only their own history. Older
+  // rows are back-filled from the partner recorded on the order.
+  try {
+    $pdo->exec("ALTER TABLE completed_deliveries ADD COLUMN partnerId INTEGER");
+    $pdo->exec("UPDATE completed_deliveries SET partnerId =
+                  (SELECT deliveryPartnerId FROM orders WHERE orders.id = completed_deliveries.id)
+                WHERE partnerId IS NULL");
+  } catch (Throwable $e) {}
   $pdo->exec("CREATE TABLE IF NOT EXISTS approvals (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, type TEXT, action TEXT
   )");

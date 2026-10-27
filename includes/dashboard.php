@@ -173,6 +173,59 @@ function empty_state(string $message, string $icon = 'inbox', ?string $ctaHref =
   <?php
 }
 
+/**
+ * Map-position fields for a form: hidden lat/lng + a "Use my current location" button.
+ * If the person never pins a spot, the typed address (fields named address/city) is
+ * looked up on submit (OpenStreetMap, no key) so "nearby" search still works.
+ */
+function location_fields($lat, $lng): void {
+  $has = $lat !== null && $lat !== '' && $lng !== null && $lng !== '';
+  ?>
+  <div data-geo class="rounded-lg border bg-gray-50 p-3">
+    <input type="hidden" name="lat" value="<?= e($lat ?? '') ?>" data-geo-lat />
+    <input type="hidden" name="lng" value="<?= e($lng ?? '') ?>" data-geo-lng />
+    <div class="flex items-center justify-between gap-3 flex-wrap">
+      <p class="text-sm text-gray-600 flex items-center gap-2"><i data-lucide="map-pin" class="w-4 h-4 text-green-600"></i>
+        <span data-geo-status><?= $has ? 'Location pinned on the map.' : 'No map location yet — it will be found from your address.' ?></span></p>
+      <button type="button" data-geo-use class="text-sm border border-green-600 text-green-700 hover:bg-green-50 rounded-lg px-3 py-1.5 inline-flex items-center gap-1.5"><i data-lucide="locate-fixed" class="w-4 h-4"></i>Use my current location</button>
+    </div>
+  </div>
+  <script>
+  (function () {
+    var box = document.currentScript.previousElementSibling, form = box.closest('form');
+    var lat = box.querySelector('[data-geo-lat]'), lng = box.querySelector('[data-geo-lng]'), st = box.querySelector('[data-geo-status]');
+    var pinned = false, typedAt = null; // pinned = used the button this visit
+    box.querySelector('[data-geo-use]').addEventListener('click', function () {
+      if (!navigator.geolocation) { st.textContent = 'Location is not available in this browser.'; return; }
+      st.textContent = 'Finding your location…';
+      navigator.geolocation.getCurrentPosition(function (p) {
+        lat.value = p.coords.latitude.toFixed(6); lng.value = p.coords.longitude.toFixed(6); pinned = true;
+        st.textContent = 'Location pinned (±' + Math.round(p.coords.accuracy) + ' m). Save to keep it.';
+      }, function () { st.textContent = 'Location permission was denied — your address will be used instead.'; },
+      { enableHighAccuracy: true, timeout: 15000 });
+    });
+    if (!form) return;
+    var addr = form.querySelector('[name="address"]');
+    if (addr) addr.addEventListener('input', function () { if (!pinned) typedAt = Date.now(); });
+    form.addEventListener('submit', function (e) {
+      if (form.dataset.geoDone || pinned || !addr || !addr.value.trim() || (lat.value && !typedAt)) return;
+      e.preventDefault(); form.dataset.geoDone = '1';
+      var city = form.querySelector('[name="city"]');
+      var q = addr.value.trim() + (city && city.value.trim() ? ', ' + city.value.trim() : '') + ', India';
+      st.textContent = 'Finding your address on the map…';
+      var sent = false;
+      var done = function () { if (sent) return; sent = true; HTMLFormElement.prototype.submit.call(form); };
+      fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=in&q=' + encodeURIComponent(q))
+        .then(function (r) { return r.ok ? r.json() : []; })
+        .then(function (d) { if (d && d[0]) { lat.value = (+d[0].lat).toFixed(6); lng.value = (+d[0].lon).toFixed(6); } done(); })
+        .catch(done);
+      setTimeout(done, 6000); // never block saving on a slow lookup
+    });
+  })();
+  </script>
+  <?php
+}
+
 /** Build the bell's notification list + unread count for a signed-in person. */
 function dashboard_notif_shell(string $role, string $email): array {
   $rows = notifications_for($role, $email, 12);

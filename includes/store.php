@@ -187,6 +187,138 @@ function delivery_partner_by_email(string $email): ?array {
   return db_row("SELECT * FROM delivery_partners WHERE lower(email) = lower(:e)", [':e' => trim($email)]);
 }
 function completed_deliveries(): array { return db_all("SELECT id, customer, amount, earnings, time FROM completed_deliveries ORDER BY cid"); }
+/** One partner's own delivery history (newest first) — never other partners' jobs. */
+function completed_deliveries_for_partner(int $pid): array {
+  return db_all("SELECT id, customer, amount, earnings, time FROM completed_deliveries WHERE partnerId = :pid ORDER BY cid DESC", [':pid' => $pid]);
+}
+function delivery_partner_find(int $id): ?array {
+  return $id > 0 ? db_row("SELECT * FROM delivery_partners WHERE id = :id", [':id' => $id]) : null;
+}
+
+/* ----------------------- delivery partner verification --------------------- */
+
+const PARTNER_ID_TYPES = ['Aadhaar Card', 'PAN Card', 'Voter ID'];
+
+/** Normalise + validate an ID number for its document type. Returns the cleaned
+ *  number, or null if it isn't in the right format. */
+function partner_id_number_clean(string $type, string $number): ?string {
+  $n = strtoupper(preg_replace('/[\s-]+/', '', $number));
+  $ok = match ($type) {
+    'Aadhaar Card' => (bool) preg_match('/^[2-9][0-9]{11}$/', $n),
+    'PAN Card'     => (bool) preg_match('/^[A-Z]{5}[0-9]{4}[A-Z]$/', $n),
+    'Voter ID'     => (bool) preg_match('/^[A-Z]{3}[0-9]{7}$/', $n),
+    default        => false,
+  };
+  return $ok ? $n : null;
+}
+
+/** Hide all but the last 4 characters of an ID number (for on-screen lists). */
+function partner_id_masked(string $number): string {
+  $n = trim($number);
+  if ($n === '') return '—';
+  return str_repeat('•', max(0, strlen($n) - 4)) . substr($n, -4);
+}
+
+function partner_id_status(array $p): string {
+  return trim((string) ($p['idStatus'] ?? '')) ?: 'Not submitted';
+}
+
+function partner_is_verified(array $p): bool {
+  return partner_id_status($p) === 'Verified';
+}
+
+/** Partners a customer can be matched with: active AND identity-verified. */
+function assignable_delivery_partners(): array {
+  return db_all("SELECT * FROM delivery_partners WHERE status = 'Active' AND idStatus = 'Verified' ORDER BY name");
+}
+
+/** Has the partner filled in everything the profile requires? */
+function partner_profile_missing(array $p): array {
+  $missing = [];
+  if (trim((string) ($p['name'] ?? '')) === '')    $missing[] = 'full name';
+  if (trim((string) ($p['address'] ?? '')) === '') $missing[] = 'address';
+  if (trim((string) ($p['phone'] ?? '')) === '')   $missing[] = 'contact number';
+  if (trim((string) ($p['photo'] ?? '')) === '')   $missing[] = 'profile photo';
+  if (trim((string) ($p['idDoc'] ?? '')) === '')   $missing[] = 'ID proof';
+  return $missing;
+}
+
+/**
+ * Save a partner's profile. $id = ['type'=>, 'number'=>, 'doc'=>] is only passed
+ * when they submitted new ID details — that sends the profile back for review.
+ */
+function delivery_partner_save_profile(int $pid, array $f, ?string $photo, ?array $id): void {
+  $p = delivery_partner_find($pid);
+  if (!$p) return;
+  db_exec("UPDATE delivery_partners SET name = :n, phone = :ph, address = :a, vehicle = :v, lat = :lat, lng = :lng,
+           photo = :photo WHERE id = :id", [
+    ':n'     => trim($f['name'] ?? '') ?: $p['name'],
+    ':ph'    => trim($f['phone'] ?? ''),
+    ':a'     => trim($f['address'] ?? ''),
+    ':v'     => in_array($f['vehicle'] ?? '', ['Bike', 'Scooter', 'Car', 'Van', 'Bicycle'], true) ? $f['vehicle'] : ($p['vehicle'] ?: 'Bike'),
+    ':lat'   => geo_coord($f['lat'] ?? null, 90),
+    ':lng'   => geo_coord($f['lng'] ?? null, 180),
+    ':photo' => $photo ?? $p['photo'],
+    ':id'    => $pid,
+  ]);
+  if ($id) {
+    // Replacing the document: remove the old private file.
+    if (!empty($p['idDoc']) && !empty($id['doc']) && $p['idDoc'] !== $id['doc']) private_document_delete($p['idDoc']);
+    db_exec("UPDATE delivery_partners SET idType = :t, idNumber = :num, idDoc = :doc, idStatus = 'Pending',
+             idNote = '', idSubmittedAt = :ts WHERE id = :id", [
+      ':t' => $id['type'], ':num' => $id['number'], ':doc' => $id['doc'] ?: $p['idDoc'],
+      ':ts' => date('Y-m-d H:i:s'), ':id' => $pid,
+    ]);
+    notify('admin', '', 'Delivery partner ID to verify', ($f['name'] ?? $p['name']) . ' submitted a ' . $id['type'] . '.', 'admin.php?tab=delivery');
+  }
+}
+
+/** Admin decision on a partner's ID proof. */
+function delivery_partner_review(int $pid, bool $approve, string $note = ''): void {
+  $p = delivery_partner_find($pid);
+  if (!$p) return;
+  db_exec("UPDATE delivery_partners SET idStatus = :s, idNote = :n WHERE id = :id",
+    [':s' => $approve ? 'Verified' : 'Rejected', ':n' => trim($note), ':id' => $pid]);
+  if (!empty($p['email'])) {
+    $approve
+      ? notify('delivery', $p['email'], 'Your ID is verified', 'You can now be assigned deliveries.', 'delivery.php?tab=profile')
+      : notify('delivery', $p['email'], 'ID verification rejected', trim($note) ?: 'Please upload a clear, valid ID proof.', 'delivery.php?tab=profile');
+  }
+}
+
+/* ------------------------------ map positions ------------------------------ */
+
+/** A latitude/longitude from a form field, or null when blank/out of range. */
+function geo_coord($v, int $limit): ?float {
+  if ($v === null || trim((string) $v) === '' || !is_numeric($v)) return null;
+  $f = (float) $v;
+  return abs($f) <= $limit ? round($f, 6) : null;
+}
+
+/** Google Maps directions link to a place (exact pin if we have one, else the address). */
+function directions_url(?float $lat, ?float $lng, string $address): string {
+  $dest = ($lat !== null && $lng !== null) ? ($lat . ',' . $lng) : $address;
+  return 'https://www.google.com/maps/dir/?api=1&destination=' . urlencode($dest);
+}
+
+/** A vendor's own address + map position (from their Settings tab). */
+function vendor_location_update(string $email, string $address, string $city, $lat, $lng): void {
+  db_exec("UPDATE vendors SET address = :a, city = :c, lat = :lat, lng = :lng WHERE lower(email) = lower(:e)", [
+    ':a' => trim($address), ':c' => trim($city),
+    ':lat' => geo_coord($lat, 90), ':lng' => geo_coord($lng, 180), ':e' => trim($email),
+  ]);
+}
+
+/* -------------------------- order status wording --------------------------- */
+
+/** Customer-facing name for an order status. Self Pickup orders never travel, so
+ *  the stored steps read as: Pending → Order Accepted → Ready for Collection → Collected. */
+function order_status_label(string $status, string $deliveryOption = ''): string {
+  if ($deliveryOption === 'Self Pickup') {
+    return ['Processing' => 'Order Accepted', 'In Transit' => 'Ready for Collection', 'Delivered' => 'Collected'][$status] ?? $status;
+  }
+  return $status;
+}
 function approvals(): array            { return db_all("SELECT * FROM approvals ORDER BY id"); }
 
 /* ------------------------------- economics -------------------------------- */
@@ -336,6 +468,48 @@ function save_uploaded_image(string $field = 'image_file'): ?string {
   return 'uploads/' . $name;
 }
 
+/** Folder for identity documents — inside data/, which the web server never serves. */
+function private_document_dir(): string {
+  $dir = __DIR__ . '/../data/id_docs';
+  if (!is_dir($dir)) @mkdir($dir, 0700, true);
+  data_dir_protect(__DIR__ . '/../data');
+  return $dir;
+}
+
+/**
+ * Store an uploaded ID proof (JPG/PNG/WebP/PDF, up to 5 MB) privately under a random
+ * name, and return that file name — or null if nothing valid was uploaded. These
+ * files are only ever sent through id-doc.php to the partner themselves or an admin.
+ */
+function save_private_document(string $field): ?string {
+  if (!upload_attempted($field)) return null;
+  $f = $_FILES[$field];
+  if (($f['error'] ?? 1) !== UPLOAD_ERR_OK) return null;
+  if (($f['size'] ?? 0) <= 0 || $f['size'] > 5 * 1024 * 1024) return null;
+
+  $finfo = finfo_open(FILEINFO_MIME_TYPE);
+  $mime  = finfo_file($finfo, $f['tmp_name']);
+  finfo_close($finfo);
+  $ext = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'application/pdf' => 'pdf'][$mime] ?? null;
+  if ($ext === null) return null;
+
+  $name = 'id_' . bin2hex(random_bytes(12)) . '.' . $ext;
+  if (!move_uploaded_file($f['tmp_name'], private_document_dir() . '/' . $name)) return null;
+  return $name;
+}
+
+/** Full path of a stored ID document (null if the name is unsafe or the file is gone). */
+function private_document_path(string $name): ?string {
+  if (!preg_match('/^id_[a-f0-9]{24}\.(jpg|png|webp|pdf)$/', $name)) return null;
+  $path = private_document_dir() . '/' . $name;
+  return is_file($path) ? $path : null;
+}
+
+function private_document_delete(string $name): void {
+  $path = private_document_path($name);
+  if ($path) @unlink($path);
+}
+
 function product_add(array $data): void {
   db_exec("INSERT INTO products (name, category, price, stock, image, vendor, rating, unit, brand, expiry, hygiene_verified)
            VALUES (:name, :category, :price, :stock, :image, :vendor, 0, :unit, :brand, :expiry, :hygiene)", [
@@ -404,10 +578,14 @@ function order_set_status(string $id, string $status): void {
   // Once delivered, any Cash-on-Delivery amount has now been collected — settle the
   // payment history (prepaid rows are already Paid, so this is a no-op for them).
   if ($status === 'Delivered') payment_mark_paid($id);
-  // Let the customer know their order moved along.
-  $o = db_row("SELECT customerEmail FROM orders WHERE id = :id", [':id' => $id]);
+  // Let the customer know their order moved along (in pickup wording for Self Pickup).
+  $o = db_row("SELECT customerEmail, deliveryOption, vendor FROM orders WHERE id = :id", [':id' => $id]);
   if ($o && !empty($o['customerEmail'])) {
-    notify('customer', $o['customerEmail'], "Order $id is now $status", "Track your order anytime.", 'orders.php');
+    $label = order_status_label($status, (string) ($o['deliveryOption'] ?? ''));
+    $body  = ($o['deliveryOption'] ?? '') === 'Self Pickup' && $status === 'In Transit'
+      ? 'Your order is packed and waiting at ' . ($o['vendor'] ?: 'the store') . '. Open My Orders for directions.'
+      : 'Track your order anytime.';
+    notify('customer', $o['customerEmail'], "Order $id is now $label", $body, 'orders.php');
   }
 }
 
@@ -952,10 +1130,11 @@ function delivery_advance(string $id, string $collectedBy = ''): void {
 
   // Completing the delivery.
   $o = db_row("SELECT * FROM orders WHERE id = :id", [':id' => $id]);
-  db_exec("INSERT INTO completed_deliveries (id, customer, amount, earnings, time)
-           VALUES (:id, :c, :a, :e, :t)", [
+  db_exec("INSERT INTO completed_deliveries (id, customer, amount, earnings, time, partnerId)
+           VALUES (:id, :c, :a, :e, :t, :pid)", [
     ':id' => $d['id'], ':c' => $d['customer'], ':a' => (int) $d['amount'],
     ':e'  => (int) round(((int) $d['amount']) * DELIVERY_PARTNER_RATE), ':t' => date('h:i A'),
+    ':pid' => (int) ($d['partnerId'] ?? 0),
   ]);
   db_exec("DELETE FROM deliveries WHERE id = :id", [':id' => $id]);
   // Mark the order delivered and tell the customer (also settles payment as a fallback).

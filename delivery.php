@@ -6,10 +6,16 @@ $user = require_role('delivery');
 $tab  = $_GET['tab'] ?? 'dashboard';
 
 // Resolve this partner's record (linked by login email) and show only their jobs.
-$partner             = delivery_partner_by_email($user['email'] ?? '');
-$activeDeliveries    = $partner ? deliveries_for_partner((int) $partner['id']) : [];
-$completedDeliveries = completed_deliveries();
+$partner = delivery_partner_by_email($user['email'] ?? '');
+if (!$partner) {
+  // Older accounts may have no partner row yet — create it so the profile can be filled in.
+  $partner = delivery_profile_create(['name' => $user['name'] ?? '', 'email' => $user['email'] ?? '', 'phone' => $user['phone'] ?? '', 'vehicle' => 'Bike']);
+}
+$activeDeliveries    = deliveries_for_partner((int) $partner['id']);
+$completedDeliveries = completed_deliveries_for_partner((int) $partner['id']);
 $todayEarnings       = array_sum(array_column($completedDeliveries, 'earnings'));
+$idStatus            = partner_id_status($partner);
+$missing             = partner_profile_missing($partner);
 
 function maps_link(string $address): string {
   return 'https://www.google.com/maps/search/?api=1&query=' . urlencode($address);
@@ -52,13 +58,33 @@ $shell = [
     ['id' => 'active',    'icon' => 'package',          'label' => 'Active Deliveries', 'badge' => $activeDeliveries ? (string) count($activeDeliveries) : null],
     ['id' => 'completed', 'icon' => 'check-circle',     'label' => 'Completed'],
     ['id' => 'earnings',  'icon' => 'indian-rupee',     'label' => 'Earnings'],
+    ['id' => 'profile',   'icon' => 'id-card',          'label' => 'Profile & ID', 'badge' => $idStatus === 'Verified' ? null : '!'],
   ],
 ];
+
+/** Coloured chip for the ID verification state. */
+function id_status_chip(string $s): string {
+  $map = ['Verified' => 'bg-green-100 text-green-700', 'Pending' => 'bg-amber-100 text-amber-700', 'Rejected' => 'bg-red-100 text-red-700'];
+  $icon = ['Verified' => 'shield-check', 'Pending' => 'clock', 'Rejected' => 'x-circle'][$s] ?? 'alert-circle';
+  $text = ['Pending' => 'Awaiting verification'][$s] ?? $s;
+  return '<span class="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full ' . ($map[$s] ?? 'bg-gray-100 text-gray-700') . '"><i data-lucide="' . $icon . '" class="w-3.5 h-3.5"></i>' . e($text) . '</span>';
+}
 
 $page_title = 'Delivery Dashboard · Local Kirana Connect';
 require __DIR__ . '/partials/head.php';
 render_dashboard_start($shell);
 ?>
+
+<?php if ($idStatus !== 'Verified' && $tab !== 'profile'): ?>
+  <a href="delivery.php?tab=profile" class="mb-6 flex items-start gap-3 rounded-xl border p-4 <?= $idStatus === 'Rejected' ? 'border-red-200 bg-red-50 text-red-800' : 'border-amber-200 bg-amber-50 text-amber-800' ?>">
+    <i data-lucide="id-card" class="w-5 h-5 mt-0.5 flex-shrink-0"></i>
+    <span class="text-sm">
+      <?php if ($idStatus === 'Pending'): ?><strong>Your ID proof is being verified.</strong> You'll start receiving orders as soon as an admin approves it.
+      <?php elseif ($idStatus === 'Rejected'): ?><strong>Your ID proof was rejected.</strong> <?= e($partner['idNote'] ?: 'Please upload a clear, valid document.') ?> Tap to re-upload.
+      <?php else: ?><strong>Complete your profile to start delivering.</strong> Add your <?= e(implode(', ', $missing) ?: 'details') ?> — customers can only choose verified partners.<?php endif; ?>
+    </span>
+  </a>
+<?php endif; ?>
 
 <?php if ($tab === 'dashboard'): ?>
   <div class="space-y-6">
@@ -67,7 +93,7 @@ render_dashboard_start($shell);
       stat_card((string) count($activeDeliveries), 'Active Deliveries', 'package', 'bg-blue-100', 'text-blue-600');
       stat_card('₹' . number_format($todayEarnings), 'Earnings', 'indian-rupee', 'bg-green-100', 'text-green-600');
       stat_card((string) count($completedDeliveries), 'Completed', 'trending-up', 'bg-purple-100', 'text-purple-600');
-      stat_card($user['phone'] ? '✓' : '—', 'Profile', 'check-circle', 'bg-orange-100', 'text-orange-600');
+      stat_card($idStatus === 'Verified' ? '✓' : '—', $idStatus === 'Verified' ? 'ID Verified' : 'ID ' . $idStatus, 'shield-check', 'bg-orange-100', 'text-orange-600');
       ?>
     </div>
 
@@ -153,6 +179,63 @@ render_dashboard_start($shell);
       </table>
     <?php else: empty_state('No completed deliveries yet.', 'check-circle'); endif; ?>
   </div>
+
+<?php elseif ($tab === 'profile'): $p = $partner; ?>
+  <form method="post" action="actions.php" enctype="multipart/form-data" class="space-y-6 max-w-3xl">
+    <input type="hidden" name="do" value="delivery_profile_save" />
+
+    <div class="bg-white rounded-xl border p-6">
+      <div class="flex items-start justify-between gap-4 mb-5 flex-wrap">
+        <div class="flex items-center gap-4">
+          <?php if (!empty($p['photo'])): ?>
+            <img src="<?= e($p['photo']) ?>" alt="" class="w-20 h-20 rounded-full object-cover border" />
+          <?php else: ?>
+            <div class="w-20 h-20 rounded-full bg-gray-100 border flex items-center justify-center text-gray-400"><i data-lucide="user" class="w-9 h-9"></i></div>
+          <?php endif; ?>
+          <div>
+            <h3 class="font-bold text-lg"><?= e($p['name'] ?: $user['name']) ?></h3>
+            <p class="text-sm text-gray-500"><?= e($user['email']) ?></p>
+            <div class="mt-1.5"><?= id_status_chip($idStatus) ?></div>
+          </div>
+        </div>
+      </div>
+      <?php if ($idStatus === 'Rejected' && !empty($p['idNote'])): ?>
+        <p class="mb-5 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">Reason from admin: <?= e($p['idNote']) ?></p>
+      <?php endif; ?>
+
+      <h4 class="font-semibold mb-3 flex items-center gap-2"><i data-lucide="user" class="w-4 h-4 text-green-600"></i>Personal details</h4>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div><label class="block text-sm font-medium mb-1" for="dp-name">Full name <span class="text-red-500">*</span></label><input id="dp-name" name="name" required value="<?= e($p['name'] ?? '') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
+        <div><label class="block text-sm font-medium mb-1" for="dp-phone">Contact number <span class="text-red-500">*</span></label><input id="dp-phone" name="phone" type="tel" required value="<?= e($p['phone'] ?? '') ?>" placeholder="+91 98765 43210" class="w-full border rounded-lg px-3 py-2" /></div>
+        <div class="md:col-span-2"><label class="block text-sm font-medium mb-1" for="dp-address">Address <span class="text-red-500">*</span></label><textarea id="dp-address" name="address" required rows="2" placeholder="House / street / area, city, pincode" class="w-full border rounded-lg px-3 py-2"><?= e($p['address'] ?? '') ?></textarea></div>
+        <div><label class="block text-sm font-medium mb-1" for="dp-vehicle">Vehicle</label>
+          <select id="dp-vehicle" name="vehicle" class="w-full border rounded-lg px-3 py-2"><?php foreach (['Bike', 'Scooter', 'Bicycle', 'Car', 'Van'] as $v): ?><option <?= ($p['vehicle'] ?? '') === $v ? 'selected' : '' ?>><?= $v ?></option><?php endforeach; ?></select>
+        </div>
+        <div><label class="block text-sm font-medium mb-1" for="dp-photo">Profile photograph <?= empty($p['photo']) ? '<span class="text-red-500">*</span>' : '' ?></label><input id="dp-photo" name="photo_file" type="file" accept="image/jpeg,image/png,image/webp" <?= empty($p['photo']) ? 'required' : '' ?> class="w-full text-sm border rounded-lg px-3 py-1.5 file:mr-3 file:border-0 file:bg-green-50 file:text-green-700 file:rounded file:px-2 file:py-1" /><p class="text-xs text-gray-500 mt-1">A clear photo of your face — customers see it so they can recognise you.</p></div>
+        <div class="md:col-span-2"><?php location_fields($p['lat'] ?? null, $p['lng'] ?? null); ?><p class="text-xs text-gray-500 mt-1">Used to show you to customers nearby. Customers only see your approximate distance, never your address.</p></div>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-xl border p-6">
+      <h4 class="font-semibold mb-1 flex items-center gap-2"><i data-lucide="id-card" class="w-4 h-4 text-green-600"></i>ID proof verification</h4>
+      <p class="text-sm text-gray-500 mb-4">Upload any one government ID. It is stored privately — only you and the admin team can view it.</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div><label class="block text-sm font-medium mb-1" for="dp-idtype">Document type</label>
+          <select id="dp-idtype" name="id_type" class="w-full border rounded-lg px-3 py-2">
+            <option value="">— Choose one —</option>
+            <?php foreach (PARTNER_ID_TYPES as $t): ?><option <?= ($p['idType'] ?? '') === $t ? 'selected' : '' ?>><?= e($t) ?></option><?php endforeach; ?>
+          </select>
+        </div>
+        <div><label class="block text-sm font-medium mb-1" for="dp-idnum">Document number</label><input id="dp-idnum" name="id_number" value="" placeholder="<?= !empty($p['idNumber']) ? e('Saved: ' . partner_id_masked($p['idNumber'])) : 'e.g. 1234 5678 9012' ?>" autocomplete="off" class="w-full border rounded-lg px-3 py-2" /><p class="text-xs text-gray-500 mt-1">Aadhaar: 12 digits · PAN: ABCDE1234F · Voter ID: ABC1234567<?= !empty($p['idNumber']) ? ' · leave blank to keep the saved one' : '' ?></p></div>
+        <div class="md:col-span-2"><label class="block text-sm font-medium mb-1" for="dp-idfile">Photo or scan of the document</label><input id="dp-idfile" name="id_file" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" class="w-full text-sm border rounded-lg px-3 py-1.5 file:mr-3 file:border-0 file:bg-green-50 file:text-green-700 file:rounded file:px-2 file:py-1" />
+          <p class="text-xs text-gray-500 mt-1">JPG, PNG, WebP or PDF, up to 5 MB.<?php if (!empty($p['idDoc'])): ?> <a href="id-doc.php?id=<?= (int) $p['id'] ?>" target="_blank" rel="noopener" class="text-green-700 font-medium hover:underline">View uploaded <?= e($p['idType'] ?: 'document') ?></a><?php endif; ?></p>
+        </div>
+      </div>
+      <?php if ($idStatus === 'Verified'): ?><p class="text-xs text-amber-700 mt-4">Changing your ID details sends your profile back for verification — you won't receive new orders until it is approved again.</p><?php endif; ?>
+    </div>
+
+    <button class="bg-green-600 hover:bg-green-700 text-white px-6 py-2.5 rounded-lg font-medium">Save profile</button>
+  </form>
 
 <?php else: /* earnings */ ?>
   <div class="space-y-6">

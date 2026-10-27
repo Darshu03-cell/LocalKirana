@@ -39,10 +39,13 @@ $CATS = category_names();
 // Real notifications (new orders, status changes, etc.)
 $nf = dashboard_notif_shell('vendor', $user['email'] ?? '');
 
-function status_badge(string $status): string {
+function status_badge(string $status, string $deliveryOption = ''): string {
   $map = ['Delivered' => 'bg-green-100 text-green-700', 'In Transit' => 'bg-blue-100 text-blue-700', 'Processing' => 'bg-amber-100 text-amber-700', 'Pending' => 'bg-gray-100 text-gray-700'];
-  return '<span class="text-xs font-medium px-2 py-1 rounded-full ' . ($map[$status] ?? 'bg-gray-100 text-gray-700') . '">' . e($status) . '</span>';
+  return '<span class="text-xs font-medium px-2 py-1 rounded-full ' . ($map[$status] ?? 'bg-gray-100 text-gray-700') . '">' . e(order_status_label($status, $deliveryOption)) . '</span>';
 }
+
+// This store's own record (address + map pin for Settings).
+$myVendor = db_row("SELECT * FROM vendors WHERE lower(email) = lower(:e)", [':e' => $user['email'] ?? '']) ?? [];
 
 // Orders-by-status for the analytics pie
 $statusCounts = [];
@@ -299,7 +302,7 @@ render_dashboard_start($shell);
                 <td class="py-3 pr-4"><?= e($o['items']) ?> items</td>
                 <td class="py-3 pr-4 font-semibold">₹<?= e($o['total']) ?></td>
                 <td class="py-3 pr-4"><span class="text-xs border rounded-full px-2 py-1"><?= e($o['paymentMethod']) ?></span></td>
-                <td class="py-3 pr-4"><?= status_badge($o['status']) ?></td>
+                <td class="py-3 pr-4"><?= status_badge($o['status'], (string) ($o['deliveryOption'] ?? '')) ?><?php if (($o['deliveryOption'] ?? '') === 'Self Pickup'): ?><br><span class="text-[10px] text-gray-500">Customer collects</span><?php endif; ?></td>
                 <td class="py-3">
                   <?php if (($o['deliveryOption'] ?? '') === 'Centralized Pickup'): ?>
                     <?php if (pickup_is_shop_ready($o['id'], $shopName)): ?>
@@ -317,7 +320,7 @@ render_dashboard_start($shell);
                     <input type="hidden" name="id" value="<?= e($o['id']) ?>" />
                     <input type="hidden" name="redirect" value="vendor.php?tab=orders<?= $statusFilter !== 'All' ? '&status=' . urlencode($statusFilter) : '' ?>" />
                     <select name="status" class="border rounded-lg px-2 py-1.5 text-xs">
-                      <?php foreach (['Pending', 'Processing', 'In Transit', 'Delivered'] as $s): ?><option <?= $o['status'] === $s ? 'selected' : '' ?>><?= e($s) ?></option><?php endforeach; ?>
+                      <?php foreach (['Pending', 'Processing', 'In Transit', 'Delivered'] as $s): ?><option value="<?= e($s) ?>" <?= $o['status'] === $s ? 'selected' : '' ?>><?= e(order_status_label($s, (string) ($o['deliveryOption'] ?? ''))) ?></option><?php endforeach; ?>
                     </select>
                     <button class="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-xs">Update</button>
                   </form>
@@ -412,6 +415,10 @@ render_dashboard_start($shell);
       <div><label class="block text-sm font-medium mb-1">Shop Name</label><input name="shopName" value="<?= e($user['shopName'] ?? '') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
       <div><label class="block text-sm font-medium mb-1">Owner</label><input name="name" value="<?= e($user['name']) ?>" class="w-full border rounded-lg px-3 py-2" /></div>
       <div><label class="block text-sm font-medium mb-1">Phone</label><input name="phone" value="<?= e($user['phone'] ?? '') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
+      <div><label class="block text-sm font-medium mb-1">Store address</label><textarea name="address" rows="2" placeholder="Shop no., street, area" class="w-full border rounded-lg px-3 py-2"><?= e($myVendor['address'] ?? '') ?></textarea><p class="text-xs text-gray-500 mt-1">Shown to customers who collect their order from your store.</p></div>
+      <div><label class="block text-sm font-medium mb-1">City</label><input name="city" value="<?= e($myVendor['city'] ?? '') ?>" class="w-full border rounded-lg px-3 py-2" /></div>
+      <?php location_fields($myVendor['lat'] ?? null, $myVendor['lng'] ?? null); ?>
+      <p class="text-xs text-gray-500 -mt-2">Tip: tap “Use my current location” while you're at the shop for the most accurate directions.</p>
       <button class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg">Save Changes</button>
     </form>
   </div>

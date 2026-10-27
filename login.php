@@ -13,6 +13,14 @@ $roleInfo = [
 $activeRole = $_GET['role'] ?? 'customer';
 if (!isset($roleInfo[$activeRole])) $activeRole = 'customer';
 $mode = ($_GET['mode'] ?? 'signin') === 'signup' ? 'signup' : 'signin';
+
+/** Admin / Super Admin accounts can't be self-created once one exists — otherwise
+ *  anyone could sign up as an admin. The very first one may still register. */
+function signup_allowed(string $role): bool {
+  if (!in_array($role, ['admin', 'superadmin'], true)) return true;
+  return !db_row("SELECT 1 FROM accounts WHERE role = :r LIMIT 1", [':r' => $role]);
+}
+if ($mode === 'signup' && !signup_allowed($activeRole)) $mode = 'signin';
 $isSignup = $mode === 'signup';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -25,6 +33,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
   /* ------------------------------- SIGN UP ------------------------------- */
   if (!empty($_POST['signup'])) {
+    if (!signup_allowed($role)) {
+      set_flash(ucfirst($role) . ' accounts can only be created by the existing administrator.', 'error');
+      header('Location: login.php?role=' . urlencode($role) . '&mode=signin'); exit;
+    }
     $name = trim($_POST['name'] ?? '');
     if ($email === '' || $password === '' || $name === '') {
       set_flash('Please fill in your name, email and password.', 'error');
@@ -49,10 +61,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     account_register($account, $password);
+    session_regenerate_id(true);
     $_SESSION['user'] = account_to_user(account_find($email));
     if ($role === 'customer') {
       set_flash('Welcome, ' . $name . '! Please add your delivery address to finish your profile.');
       header('Location: profile.php');
+    } elseif ($role === 'delivery') {
+      set_flash('Welcome, ' . $name . '! Complete your profile and upload an ID proof — you can take orders once it is verified.');
+      header('Location: delivery.php?tab=profile');
     } else {
       set_flash('Account created — welcome, ' . $name . '!');
       header('Location: ' . dashboard_for($role));
@@ -66,6 +82,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     set_flash('Invalid email or password. If you are new, please sign up.', 'error');
     header('Location: ' . $back); exit;
   }
+  // Each login page is for one role only — a vendor account can't sign in on the
+  // Customer page (and so on). Point them to the page for the role they registered as.
+  $acctRole = $acct['role'] ?? 'customer';
+  if ($acctRole !== $role) {
+    $right = $roleInfo[$acctRole]['title'] ?? ucfirst($acctRole);
+    set_flash('This account is registered as a ' . $right . '. Please sign in on the ' . $right . ' login.', 'error');
+    header('Location: login.php?role=' . urlencode($acctRole) . '&mode=signin'); exit;
+  }
+  session_regenerate_id(true);
   $_SESSION['user'] = account_to_user($acct);
   if (($acct['role'] ?? '') === 'customer' && !profile_complete($_SESSION['user'])) {
     set_flash('Welcome back! Please add your delivery address to place orders.');
@@ -107,8 +132,9 @@ require __DIR__ . '/partials/head.php';
         <div class="grid grid-cols-6 gap-1 mb-6 bg-gray-100 rounded-lg p-1">
           <?php foreach ($roleInfo as $role => $info): ?>
             <a href="login.php?role=<?= $role ?>&mode=<?= $mode ?>" title="<?= e($info['title']) ?>"
-               class="flex items-center justify-center py-2 rounded-md <?= $activeRole === $role ? 'bg-white shadow text-green-600' : 'text-gray-500 hover:text-gray-700' ?>">
+               class="flex flex-col items-center justify-center gap-0.5 py-2 rounded-md <?= $activeRole === $role ? 'bg-white shadow text-green-600' : 'text-gray-500 hover:text-gray-700' ?>">
               <i data-lucide="<?= $info['icon'] ?>" class="w-4 h-4"></i>
+              <span class="text-[10px] leading-tight font-medium text-center"><?= e($role === 'delivery' ? 'Delivery' : ($role === 'superadmin' ? 'Super' : $info['title'])) ?></span>
             </a>
           <?php endforeach; ?>
         </div>
@@ -157,8 +183,10 @@ require __DIR__ . '/partials/head.php';
           <div class="text-center text-sm text-gray-600">
             <?php if ($isSignup): ?>
               Already have an account? <a href="login.php?role=<?= e($activeRole) ?>&mode=signin" class="text-green-600 font-semibold">Sign In</a>
-            <?php else: ?>
+            <?php elseif (signup_allowed($activeRole)): ?>
               Don't have an account? <a href="login.php?role=<?= e($activeRole) ?>&mode=signup" class="text-green-600 font-semibold">Sign Up</a>
+            <?php else: ?>
+              <?= e($info['title']) ?> accounts are created by the administrator.
             <?php endif; ?>
           </div>
         </form>

@@ -7,13 +7,35 @@ $allProducts = products();
 $allVendors  = vendors_list();
 $activeOffers = active_offers();
 
-$filteredProducts = array_values(array_filter($allProducts, function ($p) use ($search, $cat) {
+// The store the customer is shopping at. Once chosen (?store=ID) it is remembered,
+// and every product list / search / category stays inside that store until they
+// pick another one (or "All stores", ?store=all).
+if (isset($_GET['store'])) {
+  if ($_GET['store'] === 'all') unset($_SESSION['shop_store']);
+  elseif (find_by_id($allVendors, (int) $_GET['store'])) $_SESSION['shop_store'] = (int) $_GET['store'];
+}
+$selectedStore = isset($_SESSION['shop_store']) ? find_by_id($allVendors, $_SESSION['shop_store']) : null;
+if (!$selectedStore) unset($_SESSION['shop_store']);
+
+$filteredProducts = array_values(array_filter($allProducts, function ($p) use ($search, $cat, $selectedStore) {
+  if ($selectedStore && ($p['vendor'] ?? '') !== $selectedStore['name']) return false;
   $matchSearch = $search === ''
     || str_contains(mb_strtolower($p['name']), mb_strtolower($search))
     || str_contains(mb_strtolower($p['category']), mb_strtolower($search));
   $matchCat = $cat === '' || strcasecmp((string) ($p['category'] ?? ''), $cat) === 0;
   return $matchSearch && $matchCat;
 }));
+
+// Verified delivery partners who have set a location, for "Delivery partners near
+// you". Positions are rounded to ~1 km so a partner's home is never exposed.
+$nearbyPartners = [];
+foreach (assignable_delivery_partners() as $dp) {
+  if ($dp['lat'] === null || $dp['lng'] === null) continue;
+  $nearbyPartners[] = [
+    'name' => $dp['name'], 'vehicle' => $dp['vehicle'] ?: 'Bike', 'photo' => $dp['photo'] ?: '',
+    'rating' => (float) ($dp['rating'] ?? 0), 'lat' => round((float) $dp['lat'], 2), 'lng' => round((float) $dp['lng'], 2),
+  ];
+}
 
 $me        = current_user();
 $isCustomer = $me && ($me['role'] ?? '') === 'customer';
@@ -37,10 +59,13 @@ function stars_html($rating): string {
 }
 
 /** One store card, reused for the Regular Stores row and the Nearby Stores grid. */
-function store_card(array $vendor, bool $isCustomer, array $favIds): void {
+function store_card(array $vendor, bool $isCustomer, array $favIds, ?array $selected = null): void {
   $isFav = in_array((int) $vendor['id'], $favIds, true);
+  $isSel = $selected && (int) $selected['id'] === (int) $vendor['id'];
+  $geoAddr = trim(($vendor['address'] ?? '') . (trim($vendor['city'] ?? '') !== '' ? ', ' . $vendor['city'] : ''));
   ?>
-  <div class="group bg-white rounded-2xl border overflow-hidden hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 <?= $isFav ? 'border-green-300 ring-1 ring-green-200' : 'border-gray-200' ?>">
+  <div data-store-card data-lat="<?= e($vendor['lat'] ?? '') ?>" data-lng="<?= e($vendor['lng'] ?? '') ?>" data-geo-address="<?= e($geoAddr) ?>"
+       class="group bg-white rounded-2xl border overflow-hidden hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 <?= $isSel ? 'border-green-500 ring-2 ring-green-300' : ($isFav ? 'border-green-300 ring-1 ring-green-200' : 'border-gray-200') ?>">
     <div class="relative h-44 overflow-hidden">
       <img src="<?= e($vendor['image']) ?>" alt="<?= e($vendor['name']) ?>" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
       <div class="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent"></div>
@@ -55,6 +80,7 @@ function store_card(array $vendor, bool $isCustomer, array $favIds): void {
           <span class="inline-flex items-center gap-1 bg-amber-500 text-white text-xs font-semibold px-2.5 py-1 rounded-full shadow-sm"><i data-lucide="heart" class="w-3.5 h-3.5 fill-white"></i>Regular Store</span>
         <?php endif; ?>
       </div>
+      <span data-distance class="hidden absolute bottom-3 left-3 inline-flex items-center gap-1 bg-blue-600 text-white text-xs font-semibold px-2.5 py-1 rounded-full shadow-sm"></span>
       <?php if ((float) ($vendor['rating'] ?? 0) > 0): ?>
         <span class="absolute top-3 right-3 inline-flex items-center gap-1 bg-white/95 text-gray-800 text-xs font-semibold px-2 py-1 rounded-full shadow-sm"><i data-lucide="star" class="w-3.5 h-3.5 text-amber-400 fill-amber-400"></i><?= e(number_format((float) $vendor['rating'], 1)) ?></span>
       <?php endif; ?>
@@ -73,7 +99,11 @@ function store_card(array $vendor, bool $isCustomer, array $favIds): void {
           </button>
         </form>
       <?php endif; ?>
-      <a href="index.php#products" class="mt-3 block text-center w-full border border-green-600 text-green-700 hover:bg-green-600 hover:text-white font-medium py-2 rounded-lg transition-colors">View Products</a>
+      <?php if ($isSel): ?>
+        <a href="index.php#products" class="mt-3 flex items-center justify-center gap-1.5 w-full bg-green-600 text-white font-medium py-2 rounded-lg"><i data-lucide="check" class="w-4 h-4"></i>Shopping here</a>
+      <?php else: ?>
+        <a href="index.php?store=<?= (int) $vendor['id'] ?>#products" class="mt-3 block text-center w-full border border-green-600 text-green-700 hover:bg-green-600 hover:text-white font-medium py-2 rounded-lg transition-colors">Shop at this store</a>
+      <?php endif; ?>
     </div>
   </div>
   <?php
@@ -108,7 +138,7 @@ require __DIR__ . '/partials/head.php';
         <?php endif; ?>
         <a href="cart.php" class="relative inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-3.5 py-2 rounded-lg font-medium shadow-sm ml-1">
           <i data-lucide="shopping-cart" class="w-5 h-5"></i><span class="hidden sm:inline">Cart</span>
-          <?php if ($cartCount > 0): ?><span class="absolute -top-2 -right-2 bg-amber-500 text-white text-xs font-bold rounded-full min-w-[1.25rem] h-5 px-1 flex items-center justify-center ring-2 ring-white"><?= $cartCount ?></span><?php endif; ?>
+          <span data-cart-count class="<?= $cartCount > 0 ? '' : 'hidden ' ?>absolute -top-2 -right-2 bg-amber-500 text-white text-xs font-bold rounded-full min-w-[1.25rem] h-5 px-1 flex items-center justify-center ring-2 ring-white"><?= $cartCount ?></span>
         </a>
       </nav>
     </div>
@@ -174,7 +204,7 @@ require __DIR__ . '/partials/head.php';
       <div class="max-w-7xl mx-auto px-4">
         <div class="flex items-center gap-2 mb-5"><i data-lucide="heart" class="w-6 h-6 text-amber-500 fill-amber-500"></i><h2 class="text-2xl font-bold text-gray-900">Your Regular / Family Stores</h2></div>
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          <?php foreach ($favStores as $vendor): store_card($vendor, $isCustomer, $favIds); endforeach; ?>
+          <?php foreach ($favStores as $vendor): store_card($vendor, $isCustomer, $favIds, $selectedStore); endforeach; ?>
         </div>
       </div>
     </section>
@@ -190,8 +220,18 @@ require __DIR__ . '/partials/head.php';
         </div>
       </div>
       <?php if ($allVendors): ?>
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          <?php foreach ($allVendors as $vendor): store_card($vendor, $isCustomer, $favIds); endforeach; ?>
+        <!-- Near me: uses the browser's location (only if the customer allows it) -->
+        <div class="bg-white border border-blue-100 rounded-2xl p-4 mb-6 flex items-center justify-between gap-3 flex-wrap">
+          <p class="text-sm text-gray-600 flex items-center gap-2"><i data-lucide="locate-fixed" class="w-5 h-5 text-blue-600 shrink-0"></i>
+            <span data-near-status>Allow location to see the shops and delivery partners closest to you.</span></p>
+          <button type="button" data-near-me class="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg"><i data-lucide="navigation" class="w-4 h-4"></i>Use my location</button>
+        </div>
+        <div id="near-partners" class="hidden mb-8">
+          <h3 class="text-lg font-bold text-gray-900 mb-3 flex items-center gap-2"><i data-lucide="bike" class="w-5 h-5 text-blue-600"></i>Delivery partners near you</h3>
+          <div id="near-partners-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+        </div>
+        <div id="store-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          <?php foreach ($allVendors as $vendor): store_card($vendor, $isCustomer, $favIds, $selectedStore); endforeach; ?>
         </div>
       <?php else: ?>
         <div class="bg-white rounded-2xl border border-dashed border-gray-300 p-12 text-center">
@@ -208,8 +248,8 @@ require __DIR__ . '/partials/head.php';
     <div class="max-w-7xl mx-auto px-4">
       <div class="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
         <div>
-          <h2 class="text-2xl md:text-3xl font-bold text-gray-900">Products</h2>
-          <p class="text-gray-500 mt-1"><?= count($filteredProducts) ?> item<?= count($filteredProducts) === 1 ? '' : 's' ?> available<?= $cat !== '' ? ' in ' . e($cat) : '' ?></p>
+          <h2 class="text-2xl md:text-3xl font-bold text-gray-900"><?= $selectedStore ? 'Products at ' . e($selectedStore['name']) : 'Products' ?></h2>
+          <p class="text-gray-500 mt-1"><?= count($filteredProducts) ?> item<?= count($filteredProducts) === 1 ? '' : 's' ?> available<?= $cat !== '' ? ' in ' . e($cat) : '' ?><?= $selectedStore ? '' : ' from all stores' ?></p>
         </div>
         <form action="index.php#products" method="get" class="flex items-center gap-2 bg-gray-100 rounded-lg px-3 py-2 w-full md:w-80">
           <?php if ($cat !== ''): ?><input type="hidden" name="cat" value="<?= e($cat) ?>" /><?php endif; ?>
@@ -217,6 +257,19 @@ require __DIR__ . '/partials/head.php';
           <input name="q" value="<?= e($search) ?>" placeholder="Search products..." class="flex-1 border-0 bg-transparent outline-none text-sm" />
         </form>
       </div>
+
+      <?php if ($selectedStore): ?>
+        <div class="flex items-center justify-between gap-3 flex-wrap bg-green-50 border border-green-200 rounded-xl px-4 py-3 mb-5">
+          <p class="text-sm text-green-800 flex items-center gap-2"><i data-lucide="store" class="w-4 h-4 shrink-0"></i>You're shopping at <strong><?= e($selectedStore['name']) ?></strong> — only its products are shown.</p>
+          <div class="flex items-center gap-2 text-sm">
+            <a href="index.php#stores" class="font-medium text-green-700 hover:underline">Change store</a>
+            <span class="text-green-300">|</span>
+            <a href="index.php?store=all#products" class="font-medium text-gray-600 hover:underline">Browse all stores</a>
+          </div>
+        </div>
+      <?php elseif ($allVendors): ?>
+        <p class="text-sm text-gray-500 mb-5 flex items-center gap-2"><i data-lucide="info" class="w-4 h-4"></i>Tip: pick a store above (“Shop at this store”) to see only that shop's products.</p>
+      <?php endif; ?>
 
       <!-- Category chips -->
       <div class="flex items-center gap-2 overflow-x-auto pb-3 mb-6 -mx-1 px-1">
@@ -231,7 +284,7 @@ require __DIR__ . '/partials/head.php';
       <?php if ($filteredProducts): ?>
         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
           <?php foreach ($filteredProducts as $product): $stock = (int) $product['stock']; ?>
-            <div class="group bg-white border border-gray-200 rounded-2xl overflow-hidden hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 flex flex-col">
+            <div id="p-<?= (int) $product['id'] ?>" class="scroll-mt-24 group bg-white border border-gray-200 rounded-2xl overflow-hidden hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 flex flex-col">
               <div class="relative aspect-[4/3] overflow-hidden bg-gray-100">
                 <img src="<?= e($product['image']) ?>" alt="<?= e($product['name']) ?>" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
                 <span class="absolute top-3 left-3 bg-white/95 text-gray-700 text-xs font-medium px-2 py-0.5 rounded-full shadow-sm"><?= e($product['category']) ?></span>
@@ -272,10 +325,11 @@ require __DIR__ . '/partials/head.php';
                   <?php endif; ?>
                 </div>
                 <?php if ($stock > 0): ?>
-                  <form action="cart-action.php" method="post" class="mt-auto">
+                  <form action="cart-action.php" method="post" class="mt-auto" data-ajax-cart>
                     <input type="hidden" name="action" value="add" />
                     <input type="hidden" name="id" value="<?= e($product['id']) ?>" />
-                    <button class="w-full inline-flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white py-2.5 rounded-lg font-medium transition-colors"><i data-lucide="plus" class="w-4 h-4"></i>Add to Cart</button>
+                    <input type="hidden" name="redirect" value="index.php#p-<?= (int) $product['id'] ?>" />
+                    <button class="w-full inline-flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white py-2.5 rounded-lg font-medium transition-colors"><i data-lucide="plus" class="w-4 h-4"></i><span data-cart-label>Add to Cart</span></button>
                   </form>
                 <?php else: ?>
                   <button disabled class="w-full bg-gray-100 text-gray-400 py-2.5 rounded-lg font-medium cursor-not-allowed">Unavailable</button>
@@ -313,4 +367,112 @@ require __DIR__ . '/partials/head.php';
     </div>
   </footer>
 </div>
+
+<script id="near-partners-data" type="application/json"><?= json_encode($nearbyPartners, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?></script>
+<script>
+// "Near me": with the customer's permission, measure the distance to every shop
+// (pinned by the vendor, or looked up from its address) and to verified delivery
+// partners, then sort the shop list nearest-first. Nothing is sent to our server.
+(function () {
+  var btn = document.querySelector('[data-near-me]');
+  var status = document.querySelector('[data-near-status]');
+  var grid = document.getElementById('store-grid');
+  if (!btn || !grid) return;
+  var PARTNERS = [];
+  try { PARTNERS = JSON.parse(document.getElementById('near-partners-data').textContent) || []; } catch (e) {}
+
+  function km(a, b) {
+    var R = 6371, r = Math.PI / 180, dLat = (b[0] - a[0]) * r, dLng = (b[1] - a[1]) * r;
+    var x = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(a[0] * r) * Math.cos(b[0] * r) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
+  }
+  function fmt(d) { return d < 1 ? Math.round(d * 1000) + ' m away' : d.toFixed(1) + ' km away'; }
+  function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+
+  // Look up a shop's address once and cache it in the browser (OpenStreetMap, ~1 lookup/sec).
+  function geocode(address) {
+    if (!address) return Promise.resolve(null);
+    var key = 'lkgeo2:' + address;
+    try { var c = localStorage.getItem(key); if (c) return Promise.resolve(JSON.parse(c)); } catch (e) {}
+    return fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=in&q=' + encodeURIComponent(address + ', India'))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d || !d[0]) return null;
+        var pt = [parseFloat(d[0].lat), parseFloat(d[0].lon)];
+        try { localStorage.setItem(key, JSON.stringify(pt)); } catch (e) {}
+        return pt;
+      }).catch(function () { return null; });
+  }
+
+  function placeCards(me) {
+    var cards = Array.prototype.slice.call(document.querySelectorAll('[data-store-card]'));
+    var lookups = 0;
+    function measure(card, pt) {
+      var badge = card.querySelector('[data-distance]');
+      if (!pt) { card.dataset.km = '99999'; return; }
+      var d = km(me, pt);
+      card.dataset.km = String(d);
+      if (badge) { badge.textContent = fmt(d); badge.classList.remove('hidden'); }
+    }
+    function sortGrid() {
+      Array.prototype.slice.call(grid.children)
+        .sort(function (a, b) { return parseFloat(a.dataset.km || 99999) - parseFloat(b.dataset.km || 99999); })
+        .forEach(function (c) { grid.appendChild(c); });
+    }
+    var queue = [];
+    cards.forEach(function (card) {
+      var lat = parseFloat(card.dataset.lat), lng = parseFloat(card.dataset.lng);
+      if (!isNaN(lat) && !isNaN(lng)) measure(card, [lat, lng]);
+      else queue.push(card);
+    });
+    sortGrid();
+    (function next() {
+      var card = queue.shift();
+      if (!card || lookups >= 12) { sortGrid(); return; }
+      lookups++;
+      geocode(card.dataset.geoAddress).then(function (pt) { measure(card, pt); sortGrid(); setTimeout(next, 1100); });
+    })();
+  }
+
+  function showPartners(me) {
+    var box = document.getElementById('near-partners'), g = document.getElementById('near-partners-grid');
+    var near = PARTNERS.map(function (p) { return Object.assign({ km: km(me, [p.lat, p.lng]) }, p); })
+      .filter(function (p) { return p.km <= 20; })
+      .sort(function (a, b) { return a.km - b.km; }).slice(0, 6);
+    box.classList.remove('hidden');
+    if (!near.length) { g.innerHTML = '<p class="text-sm text-gray-500">No verified delivery partners within 20 km right now — you can still choose Self Pickup.</p>'; return; }
+    g.innerHTML = near.map(function (p) {
+      var img = p.photo ? '<img src="' + esc(p.photo) + '" alt="" class="w-12 h-12 rounded-full object-cover border" />'
+                        : '<div class="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 font-bold">' + esc(p.name.charAt(0)) + '</div>';
+      return '<div class="bg-white border rounded-xl p-3 flex items-center gap-3">' + img +
+        '<div class="min-w-0"><p class="font-semibold text-gray-900 truncate">' + esc(p.name) + ' <span class="text-xs text-green-700">✓ Verified</span></p>' +
+        '<p class="text-xs text-gray-500">' + esc(p.vehicle) + (p.rating > 0 ? ' · ★ ' + p.rating.toFixed(1) : '') + ' · about ' + fmt(p.km) + '</p></div></div>';
+    }).join('');
+  }
+
+  function apply(me) {
+    status.textContent = 'Showing shops nearest to you first.';
+    btn.innerHTML = '<span>Refresh location</span>';
+    placeCards(me);
+    showPartners(me);
+  }
+
+  btn.addEventListener('click', function () {
+    if (!navigator.geolocation) { status.textContent = 'Location is not available in this browser.'; return; }
+    status.textContent = 'Finding your location…';
+    navigator.geolocation.getCurrentPosition(function (p) {
+      var me = [p.coords.latitude, p.coords.longitude];
+      try { localStorage.setItem('lk_loc', JSON.stringify({ pt: me, t: Date.now() })); } catch (e) {}
+      apply(me);
+    }, function () { status.textContent = 'Location permission was denied. You can still browse all shops below.'; },
+    { enableHighAccuracy: false, timeout: 15000, maximumAge: 600000 });
+  });
+
+  // Re-use a location the customer shared in the last 12 hours.
+  try {
+    var saved = JSON.parse(localStorage.getItem('lk_loc') || 'null');
+    if (saved && saved.pt && Date.now() - saved.t < 12 * 3600 * 1000) apply(saved.pt);
+  } catch (e) {}
+})();
+</script>
 <?php require __DIR__ . '/partials/foot.php'; ?>

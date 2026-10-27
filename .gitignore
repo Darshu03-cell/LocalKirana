@@ -8,8 +8,10 @@ node_modules/
 .vite/
 dist/
 
-# Runtime data (created vendor accounts with hashed passwords)
-data/
+# Runtime data (created vendor accounts with hashed passwords). The .htaccess that
+# blocks web access to this folder IS committed, so it ships with every upload.
+data/*
+!data/.htaccess
 
 # Uploaded product images
 uploads/

@@ -23,8 +23,8 @@ if (!empty($_GET['cancelled'])) {
 $total   = cart_total_price();
 $address = format_address($user['address'] ?? '', $user['city'] ?? '', $user['pincode'] ?? '');
 
-// Active delivery partners the customer can pick for Home Delivery.
-$partners = array_values(array_filter(delivery_partners(), fn($p) => ($p['status'] ?? '') === 'Active'));
+// Active, ID-verified delivery partners the customer can pick for Home Delivery.
+$partners = assignable_delivery_partners();
 // Offers this cart qualifies for (best saving first).
 $availableOffers = eligible_offers($total);
 // Group the cart by store so a multi-store order is shown clearly.
@@ -110,8 +110,23 @@ require __DIR__ . '/partials/head.php';
                   <span>Home Delivery</span>
                 </div>
                 <p class="text-sm text-gray-600 mt-1">A delivery partner brings your order to your address.</p>
+                <?php if (!$partners): ?><p class="text-xs text-amber-700 mt-1">Not available right now: no verified delivery partner is free. Please choose a pickup option.</p><?php endif; ?>
               </div>
             </label>
+          </div>
+
+          <!-- Store addresses (shown only for Individual / Self Pickup) -->
+          <div id="selfpickup-panel" class="mt-4 rounded-lg border bg-gray-50 p-4 space-y-3">
+            <p class="text-sm font-medium flex items-center gap-2"><i data-lucide="map-pin" class="w-4 h-4 text-green-600"></i>Collect from <?= count($byStore) > 1 ? 'these stores' : 'this store' ?></p>
+            <?php foreach (array_keys($byStore) as $storeName): $sv = vendor_by_name($storeName); $sAddr = $sv ? format_address($sv['address'] ?? '', $sv['city'] ?? '') : ''; ?>
+              <div class="flex items-start justify-between gap-3 flex-wrap text-sm">
+                <div><p class="font-medium"><?= e($storeName) ?></p><p class="text-gray-600"><?= e($sAddr ?: 'Address not added yet') ?><?= $sv && !empty($sv['phone']) ? ' · ' . e($sv['phone']) : '' ?></p></div>
+                <?php if ($sv && ($sAddr !== '' || $sv['lat'] !== null)): ?>
+                  <a href="<?= e(directions_url($sv['lat'] !== null ? (float) $sv['lat'] : null, $sv['lng'] !== null ? (float) $sv['lng'] : null, $storeName . ', ' . $sAddr)) ?>" target="_blank" rel="noopener" class="text-green-700 font-medium hover:underline inline-flex items-center gap-1"><i data-lucide="navigation" class="w-3.5 h-3.5"></i>Directions</a>
+                <?php endif; ?>
+              </div>
+            <?php endforeach; ?>
+            <p class="text-xs text-gray-500">We'll tell you when the store accepts your order and when it's ready for collection.</p>
           </div>
 
           <!-- Collection-centre details (shown only for Centralized Pickup) -->
@@ -128,12 +143,12 @@ require __DIR__ . '/partials/head.php';
               <select name="delivery_partner_id" id="partner-select" class="w-full border rounded-lg px-3 py-2">
                 <option value="">— Select a partner —</option>
                 <?php foreach ($partners as $p): ?>
-                  <option value="<?= e($p['id']) ?>"><?= e($p['name']) ?> · <?= e($p['vehicle'] ?: 'Bike') ?><?= (float) ($p['rating'] ?? 0) > 0 ? ' · ★ ' . e(number_format((float) $p['rating'], 1)) : '' ?></option>
+                  <option value="<?= e($p['id']) ?>"><?= e($p['name']) ?> ✓ · <?= e($p['vehicle'] ?: 'Bike') ?><?= (float) ($p['rating'] ?? 0) > 0 ? ' · ★ ' . e(number_format((float) $p['rating'], 1)) : '' ?></option>
                 <?php endforeach; ?>
               </select>
               <p class="text-xs text-gray-500 mt-1">The partner will be notified and your order appears in their deliveries.</p>
             <?php else: ?>
-              <p class="text-sm text-amber-600">No delivery partners are available right now — please choose Self Pickup.</p>
+              <p class="text-sm text-amber-600">No verified delivery partners are available right now — please choose a pickup option.</p>
             <?php endif; ?>
           </div>
         </div>
@@ -295,6 +310,8 @@ require __DIR__ . '/partials/head.php';
     if (partnerPanel)  partnerPanel.classList.toggle('hidden', opt !== 'Home Delivery');
     if (partnerSelect) partnerSelect.required = opt === 'Home Delivery';
     if (pickupPanel)   pickupPanel.classList.toggle('hidden', opt !== 'Centralized Pickup');
+    var selfPanel = document.getElementById('selfpickup-panel');
+    if (selfPanel)     selfPanel.classList.toggle('hidden', opt !== 'Self Pickup');
     syncOffer(); // delivery choice changes the handling fee → recompute the total
   }
 

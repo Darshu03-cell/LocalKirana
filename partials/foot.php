@@ -89,6 +89,44 @@
     if (msg && !window.confirm(msg)) e.preventDefault();
   });
 
+  // Small toast message (same look as the server-side flash).
+  function showToast(message, isError) {
+    var old = document.getElementById('flash'); if (old) old.remove();
+    var t = document.createElement('div');
+    t.id = 'flash';
+    t.className = 'fixed top-4 right-4 z-[100] max-w-sm rounded-lg shadow-lg px-4 py-3 text-white flex items-start gap-3 ' + (isError ? 'bg-red-600' : 'bg-green-600');
+    t.setAttribute('role', 'status');
+    t.innerHTML = '<p class="text-sm flex-1"></p><a href="cart.php" class="text-sm font-semibold underline whitespace-nowrap">View cart</a>';
+    t.querySelector('p').textContent = message;
+    if (isError) t.querySelector('a').remove();
+    document.body.appendChild(t);
+    setTimeout(function () { if (t.parentNode) t.remove(); }, 3000);
+  }
+
+  // Add to Cart without leaving or reloading the page. Forms marked data-ajax-cart
+  // still work as normal posts if JavaScript or the request fails.
+  document.addEventListener('submit', function (e) {
+    var form = e.target.closest('form[data-ajax-cart]');
+    if (!form || e.defaultPrevented || !window.fetch) return;
+    e.preventDefault();
+    var btn = form.querySelector('button');
+    if (btn) btn.disabled = true;
+    fetch(form.action, { method: 'POST', body: new FormData(form), headers: { 'X-Requested-With': 'fetch', 'Accept': 'application/json' }, credentials: 'same-origin' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (d) {
+        document.querySelectorAll('[data-cart-count]').forEach(function (el) {
+          el.textContent = d.count; el.classList.toggle('hidden', !d.count);
+        });
+        showToast(d.message, !d.ok);
+        if (btn && d.ok) {
+          var label = btn.querySelector('[data-cart-label]');
+          if (label) { label.textContent = 'Added' + (d.qty > 1 ? ' (' + d.qty + ')' : ''); setTimeout(function () { label.textContent = 'Add to Cart'; }, 1500); }
+        }
+      })
+      .catch(function () { HTMLFormElement.prototype.submit.call(form); })
+      .then(function () { if (btn) btn.disabled = false; });
+  });
+
   // Lightweight local help that works without an API or account state.
   (function () {
     var chat = document.getElementById('kirana-chat');
