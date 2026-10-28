@@ -9,6 +9,17 @@
   </div>
 </div>
 
+<!-- Install-the-app banner (revealed by script below) -->
+<div id="install-app" class="hidden fixed bottom-4 left-4 right-24 sm:right-auto sm:max-w-sm z-[85] flex items-center gap-3 rounded-2xl bg-white border border-green-100 shadow-2xl p-3">
+  <img src="icons/icon-192.png" alt="" class="w-11 h-11 rounded-xl shrink-0" />
+  <div class="flex-1 min-w-0">
+    <p class="font-bold text-sm leading-tight">Get the Local Kirana app</p>
+    <p class="text-xs text-gray-500">Faster ordering from your home screen</p>
+  </div>
+  <button type="button" data-install-yes class="rounded-lg bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-3 py-2">Install</button>
+  <button type="button" data-install-no aria-label="Not now" class="text-gray-400 hover:text-gray-700 px-1">✕</button>
+</div>
+
 <!-- LocalKirana assistant -->
 <div id="kirana-chat" class="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-[80] flex flex-col items-end gap-3" data-open="false">
   <section id="kirana-chat-panel" class="hidden w-[calc(100vw-2rem)] max-w-[22rem] overflow-hidden rounded-2xl border border-green-100 bg-white shadow-2xl shadow-green-950/15" aria-labelledby="kirana-chat-title">
@@ -207,6 +218,28 @@
     if (eye) eye.classList.toggle('hidden', reveal);
     if (off) off.classList.toggle('hidden', !reveal);
   });
+
+  // "Install the app" banner – shown when the phone's browser says the site can be installed.
+  (function () {
+    var banner = document.getElementById('install-app');
+    if (!banner) return;
+    var deferred = null;
+    function dismissed() { try { return localStorage.getItem('installAppDismissed') === '1'; } catch (e) { return false; } }
+    window.addEventListener('beforeinstallprompt', function (e) {
+      e.preventDefault();
+      deferred = e;
+      if (!dismissed()) banner.classList.remove('hidden');
+    });
+    banner.querySelector('[data-install-yes]').addEventListener('click', function () {
+      banner.classList.add('hidden');
+      if (deferred) { deferred.prompt(); deferred = null; }
+    });
+    banner.querySelector('[data-install-no]').addEventListener('click', function () {
+      banner.classList.add('hidden');
+      try { localStorage.setItem('installAppDismissed', '1'); } catch (e) {}
+    });
+    window.addEventListener('appinstalled', function () { banner.classList.add('hidden'); });
+  }());
 
   // Render Lucide icons.
   if (window.lucide) lucide.createIcons();

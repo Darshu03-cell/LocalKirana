@@ -6,6 +6,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title><?= e($page_title) ?></title>
 
+  <!-- Installable app (PWA): name, icon and colours used when added to a phone's home screen -->
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#16a34a" />
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Local Kirana" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js'); });
+    }
+  </script>
+
   <!-- Tailwind (Play CDN – no build step needed) -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
